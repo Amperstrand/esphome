@@ -18,6 +18,7 @@ class FipsTcpProxy {
   void setup(FipsBleL2cap *l2cap, uint16_t listen_port);
   void loop();
   void stop();
+  void forward_to_tcp(const uint8_t *data, size_t len);
 
  protected:
   bool listen_on(uint16_t port);

@@ -173,6 +173,21 @@ void FipsTcpProxy::stop() {
   }
 }
 
+void FipsTcpProxy::forward_to_tcp(const uint8_t *data, size_t len) {
+  for (size_t i = 0; i < MAX_TCP_CLIENTS; i++) {
+    int fd = this->client_fds_[i];
+    if (fd < 0)
+      continue;
+
+    ssize_t sent = lwip_send(fd, data, len, 0);
+    if (sent < 0) {
+      ESP_LOGW(TAG, "forward to client fd=%d failed: %d", fd, errno);
+      close(fd);
+      this->client_fds_[i] = -1;
+    }
+  }
+}
+
 }  // namespace esphome::fips_ble
 
 #endif  // USE_FIPS_BLE
