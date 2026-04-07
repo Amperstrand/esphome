@@ -180,6 +180,7 @@ void FipsBleComponent::dump_config() {
 bool FipsBleComponent::start_link_handshake() {
   this->epoch_++;
   this->msg1_resend_count_ = 0;
+  this->competing_msg1_count_ = 0;
   this->send_counter_ = 0;
   this->recv_counter_ = 0;
   this->rx_buf_len_ = 0;
@@ -292,27 +293,48 @@ bool FipsBleComponent::process_fmp_frame(const uint8_t *data, size_t len) {
       if (this->state_ != FipsState::LINK_HANDSHAKE)
         return true;
 
-      std::array<uint8_t, PUBKEY_SIZE> my_x_only;
-      std::memcpy(my_x_only.data(), this->identity_pub_.data() + 1, 32);
-
-      std::array<uint8_t, PUBKEY_SIZE> peer_x_only;
-      std::memcpy(peer_x_only.data(), this->peer_pub_.data() + 1, 32);
-
-      if (std::memcmp(my_x_only.data(), peer_x_only.data(), 32) >= 0)
-        return true;
-
       if (msg.payload_len < PUBKEY_SIZE)
         return true;
+
+      uint8_t my_node_addr[HASH_SIZE];
+      node_addr_from_pubkey(this->identity_pub_.data(), my_node_addr);
+      uint8_t peer_node_addr[HASH_SIZE];
+      node_addr_from_pubkey(this->peer_pub_.data(), peer_node_addr);
+
+      if (std::memcmp(my_node_addr, peer_node_addr, 16) >= 0)
+        return true;
+
+      this->competing_msg1_count_++;
+      if (this->competing_msg1_count_ > MAX_COMPETING_MSG1) {
+        ESP_LOGW(TAG, "too many competing MSG1 (%u), dropping", this->competing_msg1_count_);
+        return true;
+      }
 
       std::array<uint8_t, PUBKEY_SIZE> peer_e_pub;
       std::memcpy(peer_e_pub.data(), msg.payload, PUBKEY_SIZE);
 
-      NoiseIKInitiator responder;
-      if (!responder.init(this->eph_secret_.data(), this->identity_secret_.data(), this->peer_pub_.data()))
+      NoiseIKResponder responder;
+      if (!responder.init(this->identity_secret_.data(), this->identity_pub_.data(), peer_e_pub.data()))
         return false;
 
+      std::array<uint8_t, PUBKEY_SIZE> initiator_pub;
+      std::array<uint8_t, EPOCH_SIZE> epoch;
+      if (!responder.read_message1(msg.payload + PUBKEY_SIZE, msg.payload_len - PUBKEY_SIZE,
+                                   initiator_pub.data(), epoch.data())) {
+        ESP_LOGE(TAG, "responder read_message1 failed");
+        return false;
+      }
+
+      if (std::memcmp(initiator_pub.data(), this->peer_pub_.data(), PUBKEY_SIZE) != 0) {
+        ESP_LOGW(TAG, "MSG1 initiator pubkey mismatch");
+        return true;
+      }
+
+      std::array<uint8_t, PRIVKEY_SIZE> resp_eph;
+      esp_fill_random(resp_eph.data(), PRIVKEY_SIZE);
+
       uint8_t noise_out[128];
-      size_t noise_len = responder.write_message1(this->identity_pub_.data(), nullptr, noise_out);
+      size_t noise_len = responder.write_message2(resp_eph.data(), epoch.data(), noise_out);
       if (noise_len == 0)
         return false;
 
@@ -324,8 +346,8 @@ bool FipsBleComponent::process_fmp_frame(const uint8_t *data, size_t len) {
       this->l2cap_.send(msg2_buf, msg2_len);
 
       TransportState ts = responder.finalize();
-      this->send_key_ = ts.recv_key;
-      this->recv_key_ = ts.send_key;
+      this->send_key_ = ts.send_key;
+      this->recv_key_ = ts.recv_key;
       this->peer_idx_ = msg.sender_idx;
 
       ESP_LOGI(TAG, "link established (responder), peer_idx=%u", this->peer_idx_);

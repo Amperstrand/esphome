@@ -304,6 +304,112 @@ TransportState NoiseIKInitiator::finalize() {
   return state;
 }
 
+void node_addr_from_pubkey(const uint8_t *pubkey, uint8_t *addr) {
+  uint8_t x_only[32];
+  std::memcpy(x_only, pubkey + 1, 32);
+  hash_one(x_only, 32, addr);
+}
+
+bool NoiseIKResponder::init(const uint8_t *s_secret, const uint8_t *s_pub, const uint8_t *peer_e_pub) {
+  std::memcpy(this->s_priv_.data(), s_secret, PRIVKEY_SIZE);
+  std::memcpy(this->peer_e_pub_.data(), peer_e_pub, PUBKEY_SIZE);
+  this->k_.fill(0);
+
+  hash_one(PROTOCOL_NAME_IK, PROTOCOL_NAME_IK_LEN, this->h_.data());
+  std::memcpy(this->ck_.data(), this->h_.data(), HASH_SIZE);
+
+  std::array<uint8_t, PUBKEY_SIZE> normalized_s;
+  std::memcpy(normalized_s.data(), s_pub, PUBKEY_SIZE);
+  normalized_s[0] = 0x02;
+  hash_concat(this->h_.data(), normalized_s.data(), PUBKEY_SIZE, this->h_.data());
+
+  hash_concat(this->h_.data(), peer_e_pub, PUBKEY_SIZE, this->h_.data());
+
+  uint8_t dh[HASH_SIZE];
+  x_only_ecdh(this->s_priv_.data(), peer_e_pub, dh);
+  uint8_t new_ck[HASH_SIZE];
+  mix_key(this->ck_.data(), dh, new_ck, this->k_.data());
+  std::memcpy(this->ck_.data(), new_ck, HASH_SIZE);
+  this->n_ = 0;
+
+  return true;
+}
+
+bool NoiseIKResponder::read_message1(const uint8_t *data, size_t len, uint8_t *out_initiator_pub,
+                                     uint8_t *out_epoch) {
+  size_t expected = (PUBKEY_SIZE + TAG_SIZE) + (EPOCH_SIZE + TAG_SIZE);
+  if (len != expected)
+    return false;
+
+  size_t pos = 0;
+
+  uint8_t initiator_pub[PUBKEY_SIZE];
+  size_t dec_len =
+      aead_decrypt(this->k_.data(), this->n_, nullptr, 0, data, PUBKEY_SIZE + TAG_SIZE, initiator_pub);
+  if (dec_len != PUBKEY_SIZE)
+    return false;
+  this->n_++;
+  std::memcpy(out_initiator_pub, initiator_pub, PUBKEY_SIZE);
+  hash_concat(this->h_.data(), data, PUBKEY_SIZE + TAG_SIZE, this->h_.data());
+  pos += PUBKEY_SIZE + TAG_SIZE;
+
+  uint8_t dh[HASH_SIZE], new_ck[HASH_SIZE];
+  x_only_ecdh(this->s_priv_.data(), initiator_pub, dh);
+  mix_key(this->ck_.data(), dh, new_ck, this->k_.data());
+  std::memcpy(this->ck_.data(), new_ck, HASH_SIZE);
+  this->n_ = 0;
+
+  dec_len = aead_decrypt(this->k_.data(), this->n_, nullptr, 0, data + pos, EPOCH_SIZE + TAG_SIZE, out_epoch);
+  if (dec_len != EPOCH_SIZE)
+    return false;
+  this->n_++;
+  hash_concat(this->h_.data(), data + pos, EPOCH_SIZE + TAG_SIZE, this->h_.data());
+
+  return true;
+}
+
+size_t NoiseIKResponder::write_message2(const uint8_t *re_eph_secret, const uint8_t *epoch, uint8_t *out) {
+  std::array<uint8_t, PUBKEY_SIZE> re_pub;
+  if (!ecdh_pubkey(re_eph_secret, re_pub.data()))
+    return 0;
+
+  std::array<uint8_t, PRIVKEY_SIZE> re_priv;
+  std::memcpy(re_priv.data(), re_eph_secret, PRIVKEY_SIZE);
+
+  size_t pos = 0;
+  std::memcpy(out, re_pub.data(), PUBKEY_SIZE);
+  pos += PUBKEY_SIZE;
+  hash_concat(this->h_.data(), re_pub.data(), PUBKEY_SIZE, this->h_.data());
+
+  uint8_t dh[HASH_SIZE], new_ck[HASH_SIZE];
+  x_only_ecdh(re_priv.data(), this->peer_e_pub_.data(), dh);
+  mix_key(this->ck_.data(), dh, new_ck, this->k_.data());
+  std::memcpy(this->ck_.data(), new_ck, HASH_SIZE);
+  this->n_ = 0;
+
+  x_only_ecdh(this->s_priv_.data(), this->peer_e_pub_.data(), dh);
+  mix_key(this->ck_.data(), dh, new_ck, this->k_.data());
+  std::memcpy(this->ck_.data(), new_ck, HASH_SIZE);
+  this->n_ = 0;
+
+  size_t enc_len = aead_encrypt(this->k_.data(), this->n_, nullptr, 0, epoch, EPOCH_SIZE, out + pos);
+  this->n_++;
+  hash_concat(this->h_.data(), out + pos, enc_len, this->h_.data());
+  pos += enc_len;
+
+  return pos;
+}
+
+TransportState NoiseIKResponder::finalize() {
+  uint8_t k1[HASH_SIZE], k2[HASH_SIZE];
+  split(this->ck_.data(), k1, k2);
+
+  TransportState state;
+  std::memcpy(state.recv_key.data(), k1, HASH_SIZE);
+  std::memcpy(state.send_key.data(), k2, HASH_SIZE);
+  return state;
+}
+
 bool NoiseXKResponder::init(const uint8_t *s_secret, const uint8_t *ei_pub) {
   std::memcpy(this->s_priv_.data(), s_secret, PRIVKEY_SIZE);
   std::memcpy(this->ei_pub_.data(), ei_pub, PUBKEY_SIZE);

@@ -75,6 +75,24 @@ class NoiseIKInitiator {
   uint64_t n_{0};
 };
 
+void node_addr_from_pubkey(const uint8_t *pubkey, uint8_t *addr);
+
+class NoiseIKResponder {
+ public:
+  bool init(const uint8_t *s_secret, const uint8_t *s_pub, const uint8_t *peer_e_pub);
+  bool read_message1(const uint8_t *data, size_t len, uint8_t *out_initiator_pub, uint8_t *out_epoch);
+  size_t write_message2(const uint8_t *re_eph_secret, const uint8_t *epoch, uint8_t *out);
+  TransportState finalize();
+
+ protected:
+  std::array<uint8_t, HASH_SIZE> h_{};
+  std::array<uint8_t, HASH_SIZE> ck_{};
+  std::array<uint8_t, HASH_SIZE> k_{};
+  std::array<uint8_t, PRIVKEY_SIZE> s_priv_{};
+  std::array<uint8_t, PUBKEY_SIZE> peer_e_pub_{};
+  uint64_t n_{0};
+};
+
 class NoiseXKResponder {
  public:
   bool init(const uint8_t *s_secret, const uint8_t *ei_pub);

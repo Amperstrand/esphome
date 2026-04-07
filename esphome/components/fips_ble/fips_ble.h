@@ -20,6 +20,7 @@ static constexpr uint32_t HB_INTERVAL_MS = 10000;
 static constexpr uint32_t RECV_TIMEOUT_MS = 30000;
 static constexpr uint32_t MSG1_RESEND_MS = 3000;
 static constexpr uint32_t MSG1_RESEND_MAX = 10;
+static constexpr uint8_t MAX_COMPETING_MSG1 = 3;
 static constexpr size_t RECV_BUF_SIZE = 1500;
 
 enum class FipsState : uint8_t {
@@ -87,6 +88,7 @@ class FipsBleComponent : public Component {
   size_t msg1_len_{0};
   uint32_t last_msg1_sent_{0};
   uint32_t msg1_resend_count_{0};
+  uint8_t competing_msg1_count_{0};
   uint32_t last_activity_{0};
   uint32_t last_hb_sent_{0};
 };
