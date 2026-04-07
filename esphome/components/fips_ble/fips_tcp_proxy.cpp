@@ -22,8 +22,6 @@ void FipsTcpProxy::setup(FipsBleL2cap *l2cap, uint16_t listen_port) {
   for (size_t i = 0; i < MAX_TCP_CLIENTS; i++) {
     this->client_fds_[i] = -1;
   }
-
-  this->listen_on(listen_port);
 }
 
 bool FipsTcpProxy::listen_on(uint16_t port) {
@@ -65,6 +63,14 @@ bool FipsTcpProxy::listen_on(uint16_t port) {
 }
 
 void FipsTcpProxy::loop() {
+  if (!this->tcp_setup_done_) {
+    if (this->listen_on(this->listen_port_)) {
+      this->tcp_setup_done_ = true;
+    } else {
+      return;
+    }
+  }
+
   if (this->l2cap_ == nullptr || !this->l2cap_->is_ready())
     return;
 

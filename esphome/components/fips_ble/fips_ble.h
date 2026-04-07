@@ -61,6 +61,7 @@ class FipsBleComponent : public Component {
   FipsBleL2cap l2cap_{};
   FipsTcpProxy tcp_proxy_{};
   FipsState state_{FipsState::IDLE};
+  bool l2cap_setup_done_{false};
 
   std::string identity_secret_hex_{};
   std::string peer_pub_key_hex_{};

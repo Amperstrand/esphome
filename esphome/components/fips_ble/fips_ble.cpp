@@ -9,7 +9,6 @@
 #include "fips_fsp.h"
 
 #include <esp_random.h>
-#include <nvs_flash.h>
 #include <nimble/nimble_port.h>
 #include <nimble/nimble_port_freertos.h>
 #include <host/ble_hs.h>
@@ -93,18 +92,7 @@ void FipsBleComponent::setup() {
     esp_fill_random(this->eph_secret_.data(), PRIVKEY_SIZE);
   }
 
-  esp_err_t ret = nvs_flash_init();
-  if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-    nvs_flash_erase();
-    ret = nvs_flash_init();
-  }
-  if (ret != ESP_OK) {
-    ESP_LOGE(TAG, "nvs_flash_init failed");
-    this->mark_failed();
-    return;
-  }
-
-  ret = nimble_port_init();
+  esp_err_t ret = nimble_port_init();
   if (ret != ESP_OK) {
     ESP_LOGE(TAG, "nimble_port_init failed: %d", ret);
     this->mark_failed();
@@ -130,6 +118,14 @@ void FipsBleComponent::setup() {
 }
 
 void FipsBleComponent::loop() {
+  if (this->state_ == FipsState::WAITING_PEER && !this->l2cap_setup_done_) {
+    this->l2cap_.set_peer_pub(this->peer_pub_.data());
+    this->l2cap_.set_own_pub(this->identity_pub_.data());
+    if (this->l2cap_.setup()) {
+      this->l2cap_setup_done_ = true;
+    }
+  }
+
   this->l2cap_.loop();
 
   if (this->state_ == FipsState::WAITING_PEER && this->l2cap_.is_ready()) {

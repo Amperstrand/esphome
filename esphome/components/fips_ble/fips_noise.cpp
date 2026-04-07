@@ -1,6 +1,7 @@
 #ifdef USE_FIPS_BLE
 
 #include "fips_noise.h"
+#include "esphome/core/log.h"
 #include <cstring>
 #include <mbedtls/chachapoly.h>
 #include <mbedtls/ecdh.h>
@@ -8,8 +9,17 @@
 #include <mbedtls/hkdf.h>
 #include <mbedtls/md.h>
 #include <mbedtls/sha256.h>
+#include <esp_random.h>
 
 namespace esphome::fips_ble {
+
+static const char *const TAG = "fips_ble.noise";
+
+static int fips_rng(void *ctx, unsigned char *buf, size_t len) {
+  esp_fill_random(buf, len);
+  (void) ctx;
+  return 0;
+}
 
 static const uint8_t PROTOCOL_NAME_IK[] = "Noise_IK_secp256k1_ChaChaPoly_SHA256";
 static constexpr size_t PROTOCOL_NAME_IK_LEN = 37;
@@ -39,7 +49,7 @@ bool x_only_ecdh(const uint8_t *secret_key, const uint8_t *pub_key, uint8_t *out
   if (ret != 0)
     goto cleanup;
 
-  ret = mbedtls_ecdh_compute_shared(&group, &z, &pub_point, &d, nullptr, nullptr);
+  ret = mbedtls_ecdh_compute_shared(&group, &z, &pub_point, &d, fips_rng, nullptr);
   if (ret != 0)
     goto cleanup;
 
@@ -70,16 +80,22 @@ bool ecdh_pubkey(const uint8_t *secret_key, uint8_t *pub_out) {
   mbedtls_mpi_init(&d);
 
   int ret = mbedtls_ecp_group_load(&group, MBEDTLS_ECP_DP_SECP256K1);
-  if (ret != 0)
+  if (ret != 0) {
+    ESP_LOGE(TAG, "ecp_group_load secp256k1 failed: -0x%04x", -ret);
     goto cleanup;
+  }
 
   ret = mbedtls_mpi_read_binary(&d, secret_key, PRIVKEY_SIZE);
-  if (ret != 0)
+  if (ret != 0) {
+    ESP_LOGE(TAG, "mpi_read_binary failed: -0x%04x", -ret);
     goto cleanup;
+  }
 
-  ret = mbedtls_ecp_mul(&group, &point, &d, &group.G, nullptr, nullptr);
-  if (ret != 0)
+  ret = mbedtls_ecp_mul(&group, &point, &d, &group.G, fips_rng, nullptr);
+  if (ret != 0) {
+    ESP_LOGE(TAG, "ecp_mul failed: -0x%04x", -ret);
     goto cleanup;
+  }
 
   {
     size_t olen = 0;

@@ -29,6 +29,7 @@ class FipsTcpProxy {
   int listen_fd_{-1};
   int client_fds_[MAX_TCP_CLIENTS]{};
   uint16_t listen_port_{6053};
+  bool tcp_setup_done_{false};
 };
 
 }  // namespace esphome::fips_ble

@@ -5,6 +5,9 @@
 #include <array>
 #include <cstdint>
 #include <cstddef>
+#include <cstring>
+
+#include "fips_noise.h"
 
 struct ble_gap_event;
 struct ble_l2cap_event;
@@ -42,6 +45,9 @@ class FipsBleL2cap {
   bool is_ready() const { return this->state_ == L2capState::READY; }
   L2capState get_state() const { return this->state_; }
 
+  void set_peer_pub(const uint8_t *pub) { std::memcpy(this->peer_pub_.data(), pub, PUBKEY_SIZE); }
+  void set_own_pub(const uint8_t *pub) { std::memcpy(this->own_pub_.data(), pub, PUBKEY_SIZE); }
+
   bool send(const uint8_t *data, size_t len);
   int recv(uint8_t *buf, size_t buf_len);
 
@@ -61,7 +67,6 @@ class FipsBleL2cap {
   void on_l2cap_disconnected(uint16_t conn_handle, struct ble_l2cap_chan *chan);
   void on_l2cap_data_received(struct ble_l2cap_chan *chan, struct os_mbuf *sdu_rx);
 
-  bool do_pubkey_exchange();
   bool send_raw(const uint8_t *data, size_t len);
   struct os_mbuf *alloc_sdu_tx();
 
@@ -73,12 +78,17 @@ class FipsBleL2cap {
   uint32_t last_activity_{0};
 
   std::array<uint8_t, 33> peer_pub_{};
+  std::array<uint8_t, 33> own_pub_{};
 
   std::array<uint8_t, L2CAP_FRAME_CAP> rx_buf_{};
   size_t rx_buf_len_{0};
   size_t rx_buf_pos_{0};
   bool rx_frame_ready_{false};
   size_t rx_frame_len_{0};
+
+  uint32_t pubkey_exchange_start_{0};
+  bool pubkey_sent_{false};
+  bool pubkey_recv_{false};
 };
 
 }  // namespace esphome::fips_ble

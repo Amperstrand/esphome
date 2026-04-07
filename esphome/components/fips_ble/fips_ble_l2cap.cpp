@@ -78,17 +78,11 @@ bool FipsBleL2cap::setup() {
 void FipsBleL2cap::start_advertising() {
   struct ble_gap_adv_params adv_params;
   struct ble_hs_adv_fields fields;
+  struct ble_hs_adv_fields sr_fields;
   int rc;
 
   std::memset(&fields, 0, sizeof(fields));
   fields.flags = BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP;
-  fields.tx_pwr_lvl_is_present = 1;
-  fields.tx_pwr_lvl = BLE_HS_ADV_TX_PWR_LVL_AUTO;
-
-  const char *name = ble_svc_gap_device_name();
-  fields.name = (uint8_t *) name;
-  fields.name_len = strlen(name);
-  fields.name_is_complete = 1;
 
   ble_uuid128_t fips_uuid;
   std::memcpy(fips_uuid.value, FIPS_SERVICE_UUID, 16);
@@ -101,6 +95,24 @@ void FipsBleL2cap::start_advertising() {
     ESP_LOGE(TAG, "ble_gap_adv_set_fields failed: %d", rc);
     return;
   }
+
+  std::memset(&sr_fields, 0, sizeof(sr_fields));
+  const char *name = ble_svc_gap_device_name();
+  sr_fields.name = (uint8_t *) name;
+  sr_fields.name_len = strlen(name);
+  sr_fields.name_is_complete = 1;
+  sr_fields.tx_pwr_lvl_is_present = 1;
+  sr_fields.tx_pwr_lvl = BLE_HS_ADV_TX_PWR_LVL_AUTO;
+
+  rc = ble_gap_adv_rsp_set_fields(&sr_fields);
+  if (rc != 0) {
+    ESP_LOGE(TAG, "ble_gap_adv_rsp_set_fields failed: %d", rc);
+    return;
+  }
+
+  std::memset(&adv_params, 0, sizeof(adv_params));
+  adv_params.conn_mode = BLE_GAP_CONN_MODE_UND;
+  adv_params.disc_mode = BLE_GAP_DISC_MODE_GEN;
 
   rc = ble_gap_adv_start(this->own_addr_type_, nullptr, BLE_HS_FOREVER, &adv_params,
                          FipsBleL2cap::gap_event_cb, this);
@@ -122,6 +134,51 @@ void FipsBleL2cap::loop() {
     this->rx_frame_ready_ = false;
     this->start_advertising();
     return;
+  }
+
+  if (this->state_ == L2capState::L2CAP_CONNECTED) {
+    if (millis() - this->pubkey_exchange_start_ > PUBKEY_EXCHANGE_TIMEOUT_MS) {
+      ESP_LOGE(TAG, "pubkey exchange timeout");
+      this->state_ = L2capState::DISCONNECTED;
+      return;
+    }
+
+    if (!this->pubkey_recv_ && this->rx_frame_ready_ && this->rx_frame_len_ == 33) {
+      uint8_t prefix = this->rx_buf_[this->rx_buf_pos_ + 2];
+      if (prefix == 0x00) {
+        this->peer_pub_[0] = 0x02;
+        std::memcpy(this->peer_pub_.data() + 1, this->rx_buf_.data() + this->rx_buf_pos_ + 3, 32);
+        this->rx_buf_pos_ += 2 + 33;
+        this->rx_frame_ready_ = false;
+        this->rx_frame_len_ = 0;
+        if (this->rx_buf_pos_ >= this->rx_buf_len_) {
+          this->rx_buf_len_ = 0;
+          this->rx_buf_pos_ = 0;
+        }
+        this->pubkey_recv_ = true;
+      }
+    }
+
+    if (this->pubkey_recv_ && !this->pubkey_sent_) {
+      std::array<uint8_t, 33> tx;
+      tx[0] = 0x00;
+      std::memcpy(tx.data() + 1, this->own_pub_.data() + 1, 32);
+      if (this->send_raw(tx.data(), 33)) {
+        this->pubkey_sent_ = true;
+        this->state_ = L2capState::PUBKEY_EXCHANGED;
+        ESP_LOGI(TAG, "pubkey exchange OK");
+      } else {
+        ESP_LOGE(TAG, "failed to send pubkey");
+        this->state_ = L2capState::DISCONNECTED;
+      }
+    }
+
+    return;
+  }
+
+  if (this->state_ == L2capState::PUBKEY_EXCHANGED) {
+    this->state_ = L2capState::READY;
+    ESP_LOGI(TAG, "L2CAP transport ready");
   }
 
   if (this->state_ != L2capState::READY)
@@ -284,13 +341,9 @@ void FipsBleL2cap::on_l2cap_connected(int status, uint16_t conn_handle, struct b
     this->peer_mtu_ = chan_info.peer_coc_mtu;
   }
 
-  if (this->do_pubkey_exchange()) {
-    this->state_ = L2capState::READY;
-    ESP_LOGI(TAG, "L2CAP transport ready");
-  } else {
-    ESP_LOGE(TAG, "pubkey exchange failed");
-    this->state_ = L2capState::DISCONNECTED;
-  }
+  this->pubkey_exchange_start_ = millis();
+  this->pubkey_sent_ = false;
+  this->pubkey_recv_ = false;
 }
 
 void FipsBleL2cap::on_l2cap_disconnected(uint16_t conn_handle, struct ble_l2cap_chan *chan) {
@@ -351,44 +404,6 @@ void FipsBleL2cap::on_l2cap_data_received(struct ble_l2cap_chan *chan, struct os
   }
 
   this->on_l2cap_accept(this->conn_handle_, this->peer_mtu_, chan);
-}
-
-bool FipsBleL2cap::do_pubkey_exchange() {
-  std::array<uint8_t, PRIVKEY_SIZE> secret{};
-  ecdh_pubkey(secret.data(), this->peer_pub_.data());
-
-  std::array<uint8_t, 33> tx;
-  tx[0] = 0x00;
-  std::memcpy(tx.data() + 1, this->peer_pub_.data() + 1, 32);
-
-  if (!this->send_raw(tx.data(), 33)) {
-    ESP_LOGE(TAG, "failed to send pubkey");
-    return false;
-  }
-
-  uint32_t start = millis();
-  while (millis() - start < PUBKEY_EXCHANGE_TIMEOUT_MS) {
-    if (this->rx_frame_ready_ && this->rx_frame_len_ == 33) {
-      uint8_t prefix = this->rx_buf_[this->rx_buf_pos_ + 2];
-      if (prefix == 0x00) {
-        this->peer_pub_[0] = 0x02;
-        std::memcpy(this->peer_pub_.data() + 1, this->rx_buf_.data() + this->rx_buf_pos_ + 3, 32);
-        this->rx_buf_pos_ += 2 + 33;
-        this->rx_frame_ready_ = false;
-        this->rx_frame_len_ = 0;
-        if (this->rx_buf_pos_ >= this->rx_buf_len_) {
-          this->rx_buf_len_ = 0;
-          this->rx_buf_pos_ = 0;
-        }
-        ESP_LOGI(TAG, "pubkey exchange OK");
-        return true;
-      }
-    }
-    delay(10);
-  }
-
-  ESP_LOGE(TAG, "pubkey exchange timeout");
-  return false;
 }
 
 int FipsBleL2cap::gap_event_cb(struct ble_gap_event *event, void *arg) {
