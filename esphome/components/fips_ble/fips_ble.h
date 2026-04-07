@@ -18,13 +18,11 @@ class FipsBleComponent : public Component {
 
   void set_identity_secret(const std::string &secret) { this->identity_secret_ = secret; }
   void set_peer_public_key(const std::string &pub_key) { this->peer_public_key_ = pub_key; }
-  void set_ble_address(const std::array<uint8_t, 6> &addr) { this->ble_address_ = addr; }
   void set_api_port(uint16_t port) { this->api_port_ = port; }
 
  protected:
   std::string identity_secret_{};
   std::string peer_public_key_{};
-  std::array<uint8_t, 6> ble_address_{};
   uint16_t api_port_{6053};
 };
 
