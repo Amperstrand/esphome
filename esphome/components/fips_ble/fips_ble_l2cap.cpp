@@ -144,11 +144,11 @@ void FipsBleL2cap::loop() {
     }
 
     if (!this->pubkey_recv_ && this->rx_frame_ready_ && this->rx_frame_len_ == 33) {
-      uint8_t prefix = this->rx_buf_[this->rx_buf_pos_ + 2];
+      uint8_t prefix = this->rx_buf_[this->rx_buf_pos_];
       if (prefix == 0x00) {
         this->peer_pub_[0] = 0x02;
-        std::memcpy(this->peer_pub_.data() + 1, this->rx_buf_.data() + this->rx_buf_pos_ + 3, 32);
-        this->rx_buf_pos_ += 2 + 33;
+        std::memcpy(this->peer_pub_.data() + 1, this->rx_buf_.data() + this->rx_buf_pos_ + 1, 32);
+        this->rx_buf_pos_ += 33;
         this->rx_frame_ready_ = false;
         this->rx_frame_len_ = 0;
         if (this->rx_buf_pos_ >= this->rx_buf_len_) {
@@ -196,24 +196,13 @@ bool FipsBleL2cap::send(const uint8_t *data, size_t len) {
   if (len > this->peer_mtu_)
     return false;
 
-  uint16_t frame_len = static_cast<uint16_t>(2 + len);
-  if (frame_len > this->peer_mtu_)
-    return false;
-
   struct os_mbuf *sdu_tx = this->alloc_sdu_tx();
   if (sdu_tx == nullptr) {
     ESP_LOGE(TAG, "os_mbuf_get_pkthdr failed for send");
     return false;
   }
 
-  uint8_t hdr[2];
-  hdr[0] = static_cast<uint8_t>(len & 0xFF);
-  hdr[1] = static_cast<uint8_t>((len >> 8) & 0xFF);
-
-  int rc = os_mbuf_append(sdu_tx, hdr, 2);
-  if (rc == 0 && len > 0)
-    rc = os_mbuf_append(sdu_tx, data, len);
-
+  int rc = os_mbuf_append(sdu_tx, data, len);
   if (rc != 0) {
     os_mbuf_free_chain(sdu_tx);
     ESP_LOGE(TAG, "os_mbuf_append failed: %d", rc);
@@ -270,9 +259,9 @@ int FipsBleL2cap::recv(uint8_t *buf, size_t buf_len) {
   if (copy_len > buf_len)
     copy_len = buf_len;
 
-  std::memcpy(buf, this->rx_buf_.data() + 2, copy_len);
+  std::memcpy(buf, this->rx_buf_.data() + this->rx_buf_pos_, copy_len);
 
-  this->rx_buf_pos_ += 2 + this->rx_frame_len_;
+  this->rx_buf_pos_ += this->rx_frame_len_;
   this->rx_frame_ready_ = false;
   this->rx_frame_len_ = 0;
 
@@ -386,21 +375,9 @@ void FipsBleL2cap::on_l2cap_data_received(struct ble_l2cap_chan *chan, struct os
   os_mbuf_free_chain(sdu_rx);
   this->last_activity_ = millis();
 
-  while (this->rx_buf_pos_ + 2 <= this->rx_buf_len_) {
-    uint16_t payload_len = static_cast<uint16_t>(this->rx_buf_[this->rx_buf_pos_]) |
-                           (static_cast<uint16_t>(this->rx_buf_[this->rx_buf_pos_ + 1]) << 8);
-
-    if (payload_len == 0 || payload_len > 1500) {
-      this->rx_buf_pos_ = this->rx_buf_len_;
-      break;
-    }
-
-    if (this->rx_buf_pos_ + 2 + payload_len > this->rx_buf_len_)
-      break;
-
+  if (this->rx_buf_len_ > 0) {
     this->rx_frame_ready_ = true;
-    this->rx_frame_len_ = payload_len;
-    break;
+    this->rx_frame_len_ = this->rx_buf_len_ - this->rx_buf_pos_;
   }
 
   this->on_l2cap_accept(this->conn_handle_, this->peer_mtu_, chan);

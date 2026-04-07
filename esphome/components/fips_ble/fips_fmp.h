@@ -54,7 +54,10 @@ size_t fmp_build_established(uint32_t receiver_idx, uint64_t counter, uint8_t ms
 
 bool fmp_parse_message(const uint8_t *data, size_t len, FmpParsedMessage &msg);
 
-size_t fmp_decrypt_established(const uint8_t *key, const FmpParsedMessage &msg, uint8_t *out, size_t out_len);
+size_t fmp_decrypt_established(const uint8_t *key, uint64_t counter, const uint8_t *aad, size_t aad_len,
+                             const uint8_t *ciphertext, size_t ct_len, uint8_t *out);
+
+size_t fmp_calculate_frame_len(const uint8_t *prefix, size_t prefix_len);
 
 }  // namespace esphome::fips_ble
 

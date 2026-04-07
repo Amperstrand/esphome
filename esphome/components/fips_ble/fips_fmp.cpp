@@ -59,13 +59,15 @@ size_t fmp_build_established(uint32_t receiver_idx, uint64_t counter, uint8_t ms
                               size_t out_len) {
   size_t inner_total = FMP_INNER_HEADER_SIZE + inner_len;
   size_t encrypted_len = inner_total + TAG_SIZE;
-  size_t payload_len = FMP_IDX_SIZE + 8 + encrypted_len;
-  size_t total = FMP_PREFIX_SIZE + payload_len;
+  size_t total = FMP_PREFIX_SIZE + FMP_IDX_SIZE + 8 + encrypted_len;
 
   if (out_len < total)
     return 0;
 
-  fmp_build_prefix(PHASE_ESTABLISHED, 0x00, static_cast<uint16_t>(payload_len), out);
+  // payload_len = inner plaintext size only (NOT including idx/counter/tag)
+  // FIPS calculate_frame_len: ESTABLISHED_HEADER_SIZE(16) + payload_len + TAG_SIZE(16)
+  uint16_t payload_len = static_cast<uint16_t>(inner_total);
+  fmp_build_prefix(PHASE_ESTABLISHED, 0x00, payload_len, out);
   size_t pos = FMP_PREFIX_SIZE;
 
   for (int i = 0; i < 4; i++) {
@@ -152,15 +154,25 @@ bool fmp_parse_message(const uint8_t *data, size_t len, FmpParsedMessage &msg) {
   }
 }
 
-size_t fmp_decrypt_established(const uint8_t *key, const FmpParsedMessage &msg, uint8_t *out, size_t out_len) {
-  if (msg.payload_len < TAG_SIZE + FMP_INNER_HEADER_SIZE)
+size_t fmp_decrypt_established(const uint8_t *key, uint64_t counter, const uint8_t *aad, size_t aad_len,
+                             const uint8_t *ciphertext, size_t ct_len, uint8_t *out) {
+  if (ct_len < TAG_SIZE + FMP_INNER_HEADER_SIZE)
     return 0;
+  return aead_decrypt(key, counter, aad, aad_len, ciphertext, ct_len, out);
+}
 
-  size_t ct_len = msg.payload_len;
-  uint8_t outer_header[FMP_ENCRYPTED_HEADER_SIZE];
-  std::memcpy(outer_header, msg.payload - FMP_IDX_SIZE - 8, FMP_ENCRYPTED_HEADER_SIZE);
-
-  return aead_decrypt(key, msg.counter, outer_header, FMP_ENCRYPTED_HEADER_SIZE, msg.payload, ct_len, out);
+size_t fmp_calculate_frame_len(const uint8_t *prefix, size_t prefix_len) {
+  if (prefix_len < FMP_PREFIX_SIZE)
+    return 0;
+  uint8_t version = prefix[0] >> 4;
+  if (version != FMP_VERSION)
+    return 0;
+  uint8_t phase = prefix[0] & 0x0F;
+  uint16_t payload_len = static_cast<uint16_t>(prefix[2]) | (static_cast<uint16_t>(prefix[3]) << 8);
+  if (phase == PHASE_ESTABLISHED) {
+    return FMP_ENCRYPTED_HEADER_SIZE + payload_len + TAG_SIZE;
+  }
+  return FMP_PREFIX_SIZE + payload_len;
 }
 
 }  // namespace esphome::fips_ble

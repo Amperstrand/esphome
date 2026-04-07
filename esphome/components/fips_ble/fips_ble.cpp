@@ -239,22 +239,15 @@ bool FipsBleComponent::handle_received_data() {
   this->rx_buf_len_ += static_cast<size_t>(n);
 
   while (this->rx_buf_pos_ < this->rx_buf_len_) {
-    if (this->rx_buf_len_ - this->rx_buf_pos_ < 2)
-      break;
-
-    uint16_t frame_len = static_cast<uint16_t>(this->rx_buf_[this->rx_buf_pos_]) |
-                        (static_cast<uint16_t>(this->rx_buf_[this->rx_buf_pos_ + 1]) << 8);
-
-    if (frame_len == 0 || frame_len > 1500) {
+    size_t frame_len = fmp_calculate_frame_len(this->rx_buf_.data() + this->rx_buf_pos_,
+                                                this->rx_buf_len_ - this->rx_buf_pos_);
+    if (frame_len == 0 || frame_len > this->rx_buf_len_ - this->rx_buf_pos_) {
       this->rx_buf_pos_ = this->rx_buf_len_;
       break;
     }
 
-    if (this->rx_buf_pos_ + 2 + frame_len > this->rx_buf_len_)
-      break;
-
-    bool ok = this->process_fmp_frame(this->rx_buf_.data() + this->rx_buf_pos_ + 2, frame_len);
-    this->rx_buf_pos_ += 2 + frame_len;
+    bool ok = this->process_fmp_frame(this->rx_buf_.data() + this->rx_buf_pos_, frame_len);
+    this->rx_buf_pos_ += frame_len;
     if (!ok)
       return false;
   }
@@ -347,8 +340,12 @@ bool FipsBleComponent::process_fmp_frame(const uint8_t *data, size_t len) {
       this->recv_counter_ = msg.counter;
       this->last_activity_ = millis();
 
+      const uint8_t *ciphertext = msg.payload;
+      size_t ct_len = msg.payload_len;
+
       uint8_t decrypted[512];
-      size_t dec_len = fmp_decrypt_established(this->recv_key_.data(), msg, decrypted, sizeof(decrypted));
+      size_t dec_len = fmp_decrypt_established(this->recv_key_.data(), msg.counter, data,
+                                               FMP_ENCRYPTED_HEADER_SIZE, ciphertext, ct_len, decrypted);
       if (dec_len < FMP_INNER_HEADER_SIZE) {
         ESP_LOGW(TAG, "decrypt failed or too short");
         return true;
