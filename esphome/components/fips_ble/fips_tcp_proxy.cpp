@@ -1,4 +1,3 @@
-#ifdef USE_ESP32
 #ifdef USE_FIPS_BLE
 
 #include "fips_tcp_proxy.h"
@@ -191,4 +190,3 @@ void FipsTcpProxy::forward_to_tcp(const uint8_t *data, size_t len) {
 }  // namespace esphome::fips_ble
 
 #endif  // USE_FIPS_BLE
-#endif  // USE_ESP32

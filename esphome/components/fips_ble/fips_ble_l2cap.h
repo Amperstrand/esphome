@@ -1,21 +1,21 @@
 #pragma once
 
-#ifdef USE_ESP32
 #ifdef USE_FIPS_BLE
 
 #include <array>
 #include <cstdint>
 #include <cstddef>
 
-#include <os/os_mempool.h>
-#include <os/os_mbuf.h>
+struct ble_gap_event;
+struct ble_l2cap_event;
+struct ble_l2cap_chan;
+struct os_mbuf;
 
 namespace esphome::fips_ble {
 
 static constexpr uint16_t FIPS_L2CAP_PSM = 133;
 static constexpr uint16_t FIPS_L2CAP_MTU = 512;
 static constexpr size_t L2CAP_FRAME_CAP = 512;
-static constexpr size_t L2CAP_RX_BUF_COUNT = 20;
 
 static constexpr uint8_t FIPS_SERVICE_UUID[16] = {
     0x4c, 0x8f, 0x64, 0x40, 0xcc, 0xc9, 0x87, 0x9f,
@@ -63,6 +63,7 @@ class FipsBleL2cap {
 
   bool do_pubkey_exchange();
   bool send_raw(const uint8_t *data, size_t len);
+  struct os_mbuf *alloc_sdu_tx();
 
   L2capState state_{L2capState::IDLE};
   uint16_t conn_handle_{0};
@@ -78,13 +79,8 @@ class FipsBleL2cap {
   size_t rx_buf_pos_{0};
   bool rx_frame_ready_{false};
   size_t rx_frame_len_{0};
-
-  os_membuf_t sdu_mem_[OS_MEMPOOL_SIZE(L2CAP_RX_BUF_COUNT, FIPS_L2CAP_MTU)];
-  struct os_mempool sdu_mempool_{};
-  struct os_mbuf_pool sdu_pool_{};
 };
 
 }  // namespace esphome::fips_ble
 
 #endif  // USE_FIPS_BLE
-#endif  // USE_ESP32

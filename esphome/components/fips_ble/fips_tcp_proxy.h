@@ -1,6 +1,5 @@
 #pragma once
 
-#ifdef USE_ESP32
 #ifdef USE_FIPS_BLE
 
 #include <cstdint>
@@ -35,4 +34,3 @@ class FipsTcpProxy {
 }  // namespace esphome::fips_ble
 
 #endif  // USE_FIPS_BLE
-#endif  // USE_ESP32

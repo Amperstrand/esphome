@@ -1,9 +1,9 @@
-#ifdef USE_ESP32
 #ifdef USE_FIPS_BLE
 
 #include "fips_ble_l2cap.h"
 #include "fips_noise.h"
 #include "esphome/core/log.h"
+#include "esphome/core/hal.h"
 
 #include <cstring>
 
@@ -21,30 +21,34 @@ extern "C" {
 void ble_store_config_init(void);
 }
 
-namespace esphome {
+namespace esphome::fips_ble {
+
+using esphome::delay;
+using esphome::millis;
 
 static const char *const TAG = "fips_ble.l2cap";
 
 static FipsBleL2cap *g_l2cap_instance{nullptr};
 
+static constexpr uint32_t L2CAP_RX_BUF_COUNT = 20;
+
 static constexpr uint32_t ACTIVITY_TIMEOUT_MS = 30000;
 static constexpr uint32_t PUBKEY_EXCHANGE_TIMEOUT_MS = 5000;
 
-}  // namespace esphome
-
-using namespace esphome::fips_ble;
+static os_membuf_t s_sdu_mem[OS_MEMPOOL_SIZE(L2CAP_RX_BUF_COUNT, FIPS_L2CAP_MTU)];
+static struct os_mempool s_sdu_mempool;
+static struct os_mbuf_pool s_sdu_pool;
 
 bool FipsBleL2cap::setup() {
   g_l2cap_instance = this;
 
-  int rc = os_mempool_init(&this->sdu_mempool_, L2CAP_RX_BUF_COUNT, FIPS_L2CAP_MTU,
-                           this->sdu_mem_, "fips_coc");
+  int rc = os_mempool_init(&s_sdu_mempool, L2CAP_RX_BUF_COUNT, FIPS_L2CAP_MTU, s_sdu_mem, "fips_coc");
   if (rc != 0) {
     ESP_LOGE(TAG, "os_mempool_init failed: %d", rc);
     return false;
   }
 
-  rc = os_mbuf_pool_init(&this->sdu_pool_, &this->sdu_mempool_, FIPS_L2CAP_MTU, L2CAP_RX_BUF_COUNT);
+  rc = os_mbuf_pool_init(&s_sdu_pool, &s_sdu_mempool, FIPS_L2CAP_MTU, L2CAP_RX_BUF_COUNT);
   if (rc != 0) {
     ESP_LOGE(TAG, "os_mbuf_pool_init failed: %d", rc);
     return false;
@@ -98,18 +102,6 @@ void FipsBleL2cap::start_advertising() {
     return;
   }
 
-  struct ble_hs_adv_fields scan_fields;
-  std::memset(&scan_fields, 0, sizeof(scan_fields));
-  uint8_t caps = 0x01;
-  scan_fields.svc_data_uuid16 = (ble_uuid16_t[]){{0x4649}};
-  scan_fields.num_svc_data_uuid16 = 1;
-  scan_fields.svc_data_uuid16_len = 1;
-  scan_fields.transport = BLE_GAP_ADV_TRANSPORT_TYPE_LE;
-
-  std::memset(&adv_params, 0, sizeof(adv_params));
-  adv_params.conn_mode = BLE_GAP_CONN_MODE_UND;
-  adv_params.disc_mode = BLE_GAP_DISC_MODE_GEN;
-
   rc = ble_gap_adv_start(this->own_addr_type_, nullptr, BLE_HS_FOREVER, &adv_params,
                          FipsBleL2cap::gap_event_cb, this);
   if (rc != 0) {
@@ -136,6 +128,10 @@ void FipsBleL2cap::loop() {
     return;
 }
 
+struct os_mbuf *FipsBleL2cap::alloc_sdu_tx() {
+  return os_mbuf_get_pkthdr(&s_sdu_pool, 0);
+}
+
 bool FipsBleL2cap::send(const uint8_t *data, size_t len) {
   if (this->state_ != L2capState::READY || this->l2cap_chan_ == nullptr)
     return false;
@@ -147,7 +143,7 @@ bool FipsBleL2cap::send(const uint8_t *data, size_t len) {
   if (frame_len > this->peer_mtu_)
     return false;
 
-  struct os_mbuf *sdu_tx = os_mbuf_get_pkthdr(&this->sdu_pool_, 0);
+  struct os_mbuf *sdu_tx = this->alloc_sdu_tx();
   if (sdu_tx == nullptr) {
     ESP_LOGE(TAG, "os_mbuf_get_pkthdr failed for send");
     return false;
@@ -189,7 +185,7 @@ bool FipsBleL2cap::send_raw(const uint8_t *data, size_t len) {
   if (len > this->peer_mtu_)
     return false;
 
-  struct os_mbuf *sdu_tx = os_mbuf_get_pkthdr(&this->sdu_pool_, 0);
+  struct os_mbuf *sdu_tx = this->alloc_sdu_tx();
   if (sdu_tx == nullptr)
     return false;
 
@@ -259,7 +255,7 @@ void FipsBleL2cap::on_l2cap_accept(uint16_t conn_handle, uint16_t peer_sdu_size,
   ESP_LOGI(TAG, "L2CAP CoC accept, peer_mtu=%d", peer_sdu_size);
   this->peer_mtu_ = peer_sdu_size;
 
-  struct os_mbuf *sdu_rx = os_mbuf_get_pkthdr(&this->sdu_pool_, 0);
+  struct os_mbuf *sdu_rx = os_mbuf_get_pkthdr(&s_sdu_pool, 0);
   if (sdu_rx == nullptr) {
     ESP_LOGE(TAG, "os_mbuf_get_pkthdr failed for accept");
     return;
@@ -406,7 +402,7 @@ int FipsBleL2cap::gap_event_cb(struct ble_gap_event *event, void *arg) {
       return 0;
 
     case BLE_GAP_EVENT_DISCONNECT:
-      instance->on_gap_disconnect(event->disconnect.conn_handle, event->disconnect.reason);
+      instance->on_gap_disconnect(event->disconnect.conn.conn_handle, event->disconnect.reason);
       return 0;
 
     case BLE_GAP_EVENT_ADV_COMPLETE:
@@ -456,5 +452,6 @@ int FipsBleL2cap::l2cap_event_cb(struct ble_l2cap_event *event, void *arg) {
   }
 }
 
+}  // namespace esphome::fips_ble
+
 #endif  // USE_FIPS_BLE
-#endif  // USE_ESP32

@@ -1,9 +1,12 @@
-#ifdef USE_ESP32
 #ifdef USE_FIPS_BLE
 
 #include "fips_ble.h"
 
 #include <cstring>
+
+#include "esphome/core/application.h"
+#include "esphome/core/helpers.h"
+#include "fips_fsp.h"
 
 #include <esp_random.h>
 #include <nvs_flash.h>
@@ -413,4 +416,3 @@ void FipsBleComponent::handle_error(const char *reason) {
 }  // namespace esphome::fips_ble
 
 #endif  // USE_FIPS_BLE
-#endif  // USE_ESP32

@@ -1,4 +1,3 @@
-#ifdef USE_ESP32
 #ifdef USE_FIPS_BLE
 
 #include "fips_fsp.h"
@@ -266,4 +265,3 @@ bool fsp_parse_data_message(const uint8_t *key, const uint8_t *data, size_t len,
 }  // namespace esphome::fips_ble
 
 #endif  // USE_FIPS_BLE
-#endif  // USE_ESP32

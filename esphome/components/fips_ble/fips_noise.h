@@ -1,6 +1,5 @@
 #pragma once
 
-#ifdef USE_ESP32
 #ifdef USE_FIPS_BLE
 
 #include <array>
@@ -100,4 +99,3 @@ class NoiseXKResponder {
 }  // namespace esphome::fips_ble
 
 #endif  // USE_FIPS_BLE
-#endif  // USE_ESP32

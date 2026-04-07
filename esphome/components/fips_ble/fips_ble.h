@@ -1,6 +1,5 @@
 #pragma once
 
-#ifdef USE_ESP32
 #ifdef USE_FIPS_BLE
 
 #include "fips_ble_l2cap.h"
@@ -94,4 +93,3 @@ class FipsBleComponent : public Component {
 }  // namespace esphome::fips_ble
 
 #endif  // USE_FIPS_BLE
-#endif  // USE_ESP32

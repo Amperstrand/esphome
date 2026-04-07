@@ -1,4 +1,3 @@
-#ifdef USE_ESP32
 #ifdef USE_FIPS_BLE
 
 #include "fips_noise.h"
@@ -21,10 +20,12 @@ bool x_only_ecdh(const uint8_t *secret_key, const uint8_t *pub_key, uint8_t *out
   mbedtls_ecp_group group;
   mbedtls_ecp_point pub_point;
   mbedtls_mpi z;
+  mbedtls_mpi d;
 
   mbedtls_ecp_group_init(&group);
   mbedtls_ecp_point_init(&pub_point);
   mbedtls_mpi_init(&z);
+  mbedtls_mpi_init(&d);
 
   int ret = mbedtls_ecp_group_load(&group, MBEDTLS_ECP_DP_SECP256K1);
   if (ret != 0)
@@ -34,7 +35,11 @@ bool x_only_ecdh(const uint8_t *secret_key, const uint8_t *pub_key, uint8_t *out
   if (ret != 0)
     goto cleanup;
 
-  ret = mbedtls_ecdh_compute_shared(&group, &z, &pub_point, secret_key, nullptr, nullptr);
+  ret = mbedtls_mpi_read_binary(&d, secret_key, PRIVKEY_SIZE);
+  if (ret != 0)
+    goto cleanup;
+
+  ret = mbedtls_ecdh_compute_shared(&group, &z, &pub_point, &d, nullptr, nullptr);
   if (ret != 0)
     goto cleanup;
 
@@ -51,21 +56,28 @@ cleanup:
   mbedtls_ecp_group_free(&group);
   mbedtls_ecp_point_free(&pub_point);
   mbedtls_mpi_free(&z);
+  mbedtls_mpi_free(&d);
   return ret == 0;
 }
 
 bool ecdh_pubkey(const uint8_t *secret_key, uint8_t *pub_out) {
   mbedtls_ecp_group group;
   mbedtls_ecp_point point;
+  mbedtls_mpi d;
 
   mbedtls_ecp_group_init(&group);
   mbedtls_ecp_point_init(&point);
+  mbedtls_mpi_init(&d);
 
   int ret = mbedtls_ecp_group_load(&group, MBEDTLS_ECP_DP_SECP256K1);
   if (ret != 0)
     goto cleanup;
 
-  ret = mbedtls_ecp_mul(&group, &point, secret_key, &group.G, nullptr, nullptr);
+  ret = mbedtls_mpi_read_binary(&d, secret_key, PRIVKEY_SIZE);
+  if (ret != 0)
+    goto cleanup;
+
+  ret = mbedtls_ecp_mul(&group, &point, &d, &group.G, nullptr, nullptr);
   if (ret != 0)
     goto cleanup;
 
@@ -82,6 +94,7 @@ bool ecdh_pubkey(const uint8_t *secret_key, uint8_t *pub_out) {
 cleanup:
   mbedtls_ecp_group_free(&group);
   mbedtls_ecp_point_free(&point);
+  mbedtls_mpi_free(&d);
   return ret == 0;
 }
 
@@ -380,4 +393,3 @@ TransportState NoiseXKResponder::finalize() {
 }  // namespace esphome::fips_ble
 
 #endif  // USE_FIPS_BLE
-#endif  // USE_ESP32

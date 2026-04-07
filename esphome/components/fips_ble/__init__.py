@@ -1,7 +1,7 @@
 import logging
 
 import esphome.codegen as cg
-from esphome.components.esp32 import add_idf_sdkconfig_option
+from esphome.components.esp32 import add_idf_sdkconfig_option, include_builtin_idf_component
 import esphome.config_validation as cv
 from esphome.const import CONF_ID
 
@@ -29,9 +29,17 @@ CONFIG_SCHEMA = cv.Schema(
 
 
 def final_validation(config):
+    add_idf_sdkconfig_option("CONFIG_BT_ENABLED", True)
+    add_idf_sdkconfig_option("CONFIG_BT_BLE_ENABLED", True)
     add_idf_sdkconfig_option("CONFIG_BT_NIMBLE_ENABLED", True)
+    add_idf_sdkconfig_option("CONFIG_BT_BLUEDROID_ENABLED", False)
+    add_idf_sdkconfig_option("CONFIG_BT_CLASSIC_ENABLED", False)
     add_idf_sdkconfig_option("CONFIG_BT_NIMBLE_L2CAP_COC_MAX_NUM", 1)
     add_idf_sdkconfig_option("CONFIG_BT_NIMBLE_GAP_DEVICE_NAME_MAX_LEN", 20)
+    add_idf_sdkconfig_option("CONFIG_MBEDTLS_HKDF_C", True)
+    add_idf_sdkconfig_option("CONFIG_MBEDTLS_CHACHA20_C", True)
+    add_idf_sdkconfig_option("CONFIG_MBEDTLS_POLY1305_C", True)
+    add_idf_sdkconfig_option("CONFIG_MBEDTLS_CHACHAPOLY_C", True)
     return config
 
 
@@ -46,4 +54,5 @@ async def to_code(config):
     cg.add(var.set_peer_public_key(config[CONF_PEER_PUBLIC_KEY]))
     cg.add(var.set_api_port(config[CONF_API_PORT]))
 
-    cg.add_define("USE_FIPS_BLE")
+    cg.add_build_flag("-DUSE_FIPS_BLE")
+    include_builtin_idf_component("bt")

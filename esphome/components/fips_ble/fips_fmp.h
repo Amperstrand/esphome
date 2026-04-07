@@ -1,6 +1,5 @@
 #pragma once
 
-#ifdef USE_ESP32
 #ifdef USE_FIPS_BLE
 
 #include <array>
@@ -60,4 +59,3 @@ size_t fmp_decrypt_established(const uint8_t *key, const FmpParsedMessage &msg, 
 }  // namespace esphome::fips_ble
 
 #endif  // USE_FIPS_BLE
-#endif  // USE_ESP32
