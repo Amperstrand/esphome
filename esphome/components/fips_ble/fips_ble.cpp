@@ -1,6 +1,7 @@
 #ifdef USE_FIPS_BLE
 
 #include "fips_ble.h"
+#include "fips_ble_selftest.h"
 
 #include <cstring>
 
@@ -90,6 +91,14 @@ void FipsBleComponent::setup() {
   esp_fill_random(this->eph_secret_.data(), PRIVKEY_SIZE);
   while (!ecdh_pubkey(this->eph_secret_.data(), this->eph_secret_.data())) {
     esp_fill_random(this->eph_secret_.data(), PRIVKEY_SIZE);
+  }
+
+  if (this->selftest_) {
+    if (!this->run_selftest_()) {
+      ESP_LOGE(TAG, "FIPS self-test FAILED — protocol drift detected!");
+      this->mark_failed();
+      return;
+    }
   }
 
   esp_err_t ret = nimble_port_init();
@@ -427,6 +436,8 @@ void FipsBleComponent::handle_error(const char *reason) {
   ESP_LOGW(TAG, "error: %s, reconnecting...", reason);
   this->transition(FipsState::ERROR);
 }
+
+bool FipsBleComponent::run_selftest_() { return run_fips_selftest(); }
 
 }  // namespace esphome::fips_ble
 

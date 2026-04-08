@@ -48,6 +48,8 @@ void hash_one(const uint8_t *data, size_t len, uint8_t *out);
 // HKDF-SHA256(ck, ikm) -> (new_ck, k)
 void mix_key(const uint8_t *ck, const uint8_t *ikm, uint8_t *new_ck, uint8_t *k);
 
+void split(const uint8_t *ck, uint8_t *k1, uint8_t *k2);
+
 // ChaCha20-Poly1305 encrypt. Returns total size (plaintext_len + 16)
 size_t aead_encrypt(const uint8_t *key, uint64_t nonce_ctr, const uint8_t *aad, size_t aad_len,
                     const uint8_t *plaintext, size_t pt_len, uint8_t *out);

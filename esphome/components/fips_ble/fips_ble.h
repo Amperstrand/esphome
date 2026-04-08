@@ -42,6 +42,7 @@ class FipsBleComponent : public Component {
   void set_identity_secret(const std::string &secret) { this->identity_secret_hex_ = secret; }
   void set_peer_public_key(const std::string &pub_key) { this->peer_pub_key_hex_ = pub_key; }
   void set_api_port(uint16_t port) { this->api_port_ = port; }
+  void set_selftest(bool selftest) { this->selftest_ = selftest; }
 
  protected:
   void ble_host_task(void *param);
@@ -58,11 +59,13 @@ class FipsBleComponent : public Component {
   void send_heartbeat();
   void send_established_msg(uint8_t msg_type, const uint8_t *payload, size_t payload_len);
   void handle_error(const char *reason);
+  bool run_selftest_();
 
   FipsBleL2cap l2cap_{};
   FipsTcpProxy tcp_proxy_{};
   FipsState state_{FipsState::IDLE};
   bool l2cap_setup_done_{false};
+  bool selftest_{false};
 
   std::string identity_secret_hex_{};
   std::string peer_pub_key_hex_{};

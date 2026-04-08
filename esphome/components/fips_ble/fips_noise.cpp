@@ -136,8 +136,7 @@ void mix_key(const uint8_t *ck, const uint8_t *ikm, uint8_t *new_ck, uint8_t *k)
   std::memcpy(k, okm + HASH_SIZE, HASH_SIZE);
 }
 
-// Split() = HKDF-Extract(salt=ck, ikm=empty) then HKDF-Expand(PRK, info=empty, 64)
-static void split(const uint8_t *ck, uint8_t *k1, uint8_t *k2) {
+void split(const uint8_t *ck, uint8_t *k1, uint8_t *k2) {
   uint8_t prk[HASH_SIZE];
   const mbedtls_md_info_t *md = mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
   mbedtls_md_hmac(md, ck, HASH_SIZE, nullptr, 0, prk);

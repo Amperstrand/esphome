@@ -13,6 +13,7 @@ _LOGGER = logging.getLogger(__name__)
 CONF_IDENTITY_SECRET = "identity_secret"
 CONF_PEER_PUBLIC_KEY = "peer_public_key"
 CONF_API_PORT = "api_port"
+CONF_SELFTEST = "selftest"
 
 fips_ble_ns = cg.esphome_ns.namespace("fips_ble")
 
@@ -24,6 +25,7 @@ CONFIG_SCHEMA = cv.Schema(
         cv.Required(CONF_IDENTITY_SECRET): cv.All(cv.string, cv.Length(min=64, max=64)),
         cv.Required(CONF_PEER_PUBLIC_KEY): cv.All(cv.string, cv.Length(min=66, max=66)),
         cv.Optional(CONF_API_PORT, default=6053): cv.port,
+        cv.Optional(CONF_SELFTEST, default=False): cv.boolean,
     }
 ).extend(cv.COMPONENT_SCHEMA)
 
@@ -53,6 +55,7 @@ async def to_code(config):
     cg.add(var.set_identity_secret(config[CONF_IDENTITY_SECRET]))
     cg.add(var.set_peer_public_key(config[CONF_PEER_PUBLIC_KEY]))
     cg.add(var.set_api_port(config[CONF_API_PORT]))
+    cg.add(var.set_selftest(config[CONF_SELFTEST]))
 
     cg.add_build_flag("-DUSE_FIPS_BLE")
     include_builtin_idf_component("bt")
