@@ -6,19 +6,58 @@ Instructions for AI agents working on the `fips_ble` ESPHome component.
 
 Two ESP32 boards on this machine:
 
-| Board | Serial Port | Chip | Purpose | Flash? |
-|---|---|---|---|---|
-| ESP32-S3 | `/dev/ttyACM0` | ESP32-S3-PICO-1 (rev v0.2) | **Active development target** | YES |
-| ESP32-D0WD | `/dev/ttyUSB0` | ESP32-D0WDQ6 | Runs old microfips firmware (interference source) | **NEVER** |
+| Board | Serial Port | USB VID:PID | Chip | BLE MAC | Purpose | Flash? |
+|---|---|---|---|---|---|---|
+| ESP32-S3 | `/dev/ttyACM0` | `303A:1001` | ESP32-S3-PICO-1 (rev v0.2) | `64:E8:33:72:01:24` (public) / `64:E8:33:72:01:E6` (random) | **Active development target** | YES |
+| ESP32-D0WD | `/dev/ttyUSB0` | `10C4:EA60` | ESP32-D0WDQ6 | Unknown | Runs old microfips firmware | **NEVER** |
 
-The D0WD runs stale microfips with test addresses (`02:00:00:00:00:FF`) that spams the FIPS daemon with bad MSG1s. Do not flash it.
+### Identifying the correct board
 
-## Flashing the ESP32-S3
+Always verify you're targeting the S3 before flashing. Use these checks:
+
+```bash
+# Check USB devices — S3 has ESP32-S3-PICO, D0WD has CP2102
+lsusb | grep -E "303A:1001|10C4:EA60"
+
+# Check serial port details — S3 uses USB JTAG/serial debug unit
+python3 -c "import serial.tools.list_ports as ports; [print(f'{p.device}: {p.description}') for p in ports.comports()]"
+# Expected: /dev/ttyACM0: USB JTAG/serial debug unit  (S3)
+# Expected: /dev/ttyUSB0: CP2102 USB to UART Bridge Controller  (D0WD)
+
+# Check chip identity via esptool (S3 only — D0WD may not respond to chip-id)
+python3 -m esptool --port /dev/ttyACM0 --chip esp32s3 chip-id
+# Expected: "Chip type: ESP32-S3-PICO-1 (LGA56) (revision v0.2)"
+```
+
+**NEVER flash `/dev/ttyUSB0`.** The D0WD runs stale microfips that connects to the FIPS daemon with old keys and interferes with handshake testing.
+
+### D0WD interference
+
+The D0WD's old microfips firmware connects to the FIPS daemon and presents the S3's identity pubkey. When the daemon has no peers configured, it accepts any initiator — so the D0WD can hijack the S3's peer slot. Configure the S3 as a known peer (see "FIPS Daemon" section) to prevent this.
+
+## Flashing
+
+Both boards run ESPHome with the `fips_ble` component. Each has a unique `esphome:` name, which produces a different `identity_seed` and therefore different cryptographic identity keys.
+
+### ESP32-S3 (development target)
 
 ```bash
 PYTHONPATH=/home/ubuntu/src/esphome python3 -m esphome compile /tmp/esphome-flash/fips-esp32s3.yaml
 PYTHONPATH=/home/ubuntu/src/esphome python3 -m esphome upload /tmp/esphome-flash/fips-esp32s3.yaml --device /dev/ttyACM0
 ```
+
+Board: `esp32-s3-devkitc-1` | Port: `/dev/ttyACM0` | VID:PID: `303A:1001`
+
+### ESP32-D0WD (second peer for testing)
+
+```bash
+PYTHONPATH=/home/ubuntu/src/esphome python3 -m esphome compile /tmp/esphome-flash/fips-esp32d0wd.yaml
+PYTHONPATH=/home/ubuntu/src/esphome python3 -m esphome upload /tmp/esphome-flash/fips-esp32d0wd.yaml --device /dev/ttyUSB0
+```
+
+Board: `esp32dev` | Port: `/dev/ttyUSB0` | VID:PID: `10C4:EA60`
+
+The D0WD uses regular UART for logging (NOT USB_SERIAL_JTAG). No watchdog-reset workaround needed — `esphome upload` works normally and logs appear via `esphome logs` or a serial reader.
 
 **Always confirm with the user before flashing.**
 
@@ -125,7 +164,37 @@ Key config files:
 - `/etc/fips/fips.key` — daemon nsec key
 - `/etc/fips/fips.yaml.bak` — backup with peers section
 
-The daemon currently has **no peers configured** (accepts any initiator). The S3's derived identity was accepted without being listed as a peer.
+### Peer configuration (IMPORTANT for testing)
+
+When `peers:` is configured, the daemon **only accepts MSG1 from listed identities**. This prevents the D0WD (or any rogue device) from hijacking the S3's peer slot. Configure the S3 as the sole known peer:
+
+```yaml
+peers:
+  - npub: "npub19u363m5kqup2g0rfg8m5xh93cf2g0fzthnmk3kqpr746h29"
+    alias: "fips-esp32s3"
+```
+
+The S3's npub is derived from its pubkey (`02673410bfed3f2ba8d7407c5ce26cf75a5d5714501a1d2c92174e3b63cf03a2f3`). To compute the npub for a new device, use:
+
+```bash
+# Derive identity from seed and compute npub
+python3 -c "
+import hashlib
+seed = 'fips-esp32s3'
+secret = hashlib.sha256(('esphome:fips_ble:' + seed).encode()).digest()
+# Compute compressed pubkey from secret (requires secp256k1 or similar)
+# For now, check the ESPHome dump_config log which prints the pubkey prefix
+"
+```
+
+Or read it from the ESP32 serial logs after boot — `dump_config` prints `Identity pubkey: 0267..a2f3`.
+
+### Debugging daemon peer acceptance
+
+```bash
+# Check if daemon received and accepted MSG1
+sudo journalctl -u fips --since "1 min ago" --no-pager | grep -E "handshake|MSG1|MSG2|peer.*promot|decrypt.*fail"
+```
 
 ## Key Derivation
 
@@ -137,6 +206,7 @@ Where `identity_seed` defaults to `CORE.name` (the `esphome:` name in YAML).
 
 Current keys for reference:
 - **ESP32-S3**: seed=`"fips-esp32s3"`, pubkey=`02673410bfed3f2ba8d7407c5ce26cf75a5d5714501a1d2c92174e3b63cf03a2f3`
+- **ESP32-D0WD**: seed=`"fips-esp32d0wd"`, pubkey=TODO (derives at compile time from its own seed)
 - **FIPS daemon**: nsec=`nsec1h0yfqer2tcyy58r4gaypdajfqmpp6wgusq5qgdgw2lw6xrlxkpgsqskr6m`, pubkey=`03b3989043c68d9c2d3c8f949d73e61cae27997993432c3dbbd8498117d92d95bb`
 
 ## FIPS Noise Protocol Deviations (GROUND TRUTH)
