@@ -184,8 +184,10 @@ void FipsBleComponent::loop() {
 
 void FipsBleComponent::dump_config() {
   ESP_LOGCONFIG(TAG, "FIPS BLE:");
+  ESP_LOGCONFIG(TAG, "  Identity pubkey: %02x%02x..%02x%02x", this->identity_pub_[0], this->identity_pub_[1],
+                this->identity_pub_[31], this->identity_pub_[32]);
   ESP_LOGCONFIG(TAG, "  Peer pubkey: %02x%02x..%02x%02x", this->peer_pub_[0], this->peer_pub_[1],
-                this->peer_pub_[30], this->peer_pub_[31]);
+                this->peer_pub_[31], this->peer_pub_[32]);
   ESP_LOGCONFIG(TAG, "  API port: %d", this->api_port_);
 }
 
@@ -240,6 +242,8 @@ bool FipsBleComponent::send_msg1() {
             this->eph_secret_[30], this->eph_secret_[31]);
   ESP_LOGD(TAG, "  identity_pub: %02x%02x..%02x%02x", this->identity_pub_[0], this->identity_pub_[1],
             this->identity_pub_[31], this->identity_pub_[32]);
+  ESP_LOGD(TAG, "  noise_msg1: %s", format_hex(noise_out, noise_len).c_str());
+  ESP_LOGD(TAG, "  fmp_msg1: %s", format_hex(this->msg1_buf_, this->msg1_len_).c_str());
   return true;
 }
 
