@@ -60,16 +60,24 @@ bool FipsBleL2cap::setup() {
     return false;
   }
 
-  rc = ble_hs_id_infer_auto(0, &this->own_addr_type_);
+  uint8_t static_rnd[6] = {0x64, 0xE8, 0x33, 0x72, 0x01, 0xE6};
+  rc = ble_hs_id_set_rnd(static_rnd);
   if (rc != 0) {
-    ESP_LOGE(TAG, "ble_hs_id_infer_auto failed: %d", rc);
+    ESP_LOGE(TAG, "ble_hs_id_set_rnd failed: %d", rc);
     return false;
   }
 
+  this->own_addr_type_ = BLE_ADDR_RANDOM;
   uint8_t addr_val[6] = {0};
   ble_hs_id_copy_addr(this->own_addr_type_, addr_val, nullptr);
-  ESP_LOGI(TAG, "BLE address: %02x:%02x:%02x:%02x:%02x:%02x", addr_val[0], addr_val[1], addr_val[2],
-           addr_val[3], addr_val[4], addr_val[5]);
+  ESP_LOGI(TAG, "BLE address: %02x:%02x:%02x:%02x:%02x:%02x (random)", addr_val[0], addr_val[1], addr_val[2],
+            addr_val[3], addr_val[4], addr_val[5]);
+
+  rc = ble_l2cap_create_server(FIPS_L2CAP_PSM, FIPS_L2CAP_MTU, FipsBleL2cap::l2cap_event_cb, this);
+  if (rc != 0) {
+    ESP_LOGE(TAG, "ble_l2cap_create_server failed: %d", rc);
+    return false;
+  }
 
   this->start_advertising();
   return true;
@@ -84,8 +92,9 @@ void FipsBleL2cap::start_advertising() {
   std::memset(&fields, 0, sizeof(fields));
   fields.flags = BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP;
 
-  ble_uuid128_t fips_uuid;
-  std::memcpy(fips_uuid.value, FIPS_SERVICE_UUID, 16);
+  ble_uuid128_t fips_uuid = BLE_UUID128_INIT(
+      0x4c, 0x8f, 0x64, 0x40, 0xcc, 0xc9, 0x87, 0x9f,
+      0xc0, 0x42, 0xc5, 0x2c, 0x90, 0xb7, 0x90, 0x9c);
   fields.uuids128 = &fips_uuid;
   fields.num_uuids128 = 1;
   fields.uuids128_is_complete = 1;
@@ -283,11 +292,6 @@ void FipsBleL2cap::on_gap_connect(uint16_t conn_handle, int status) {
   this->conn_handle_ = conn_handle;
   this->state_ = L2capState::BLE_CONNECTED;
   ESP_LOGI(TAG, "BLE connected, handle=%d", conn_handle);
-
-  int rc = ble_l2cap_create_server(FIPS_L2CAP_PSM, FIPS_L2CAP_MTU, FipsBleL2cap::l2cap_event_cb, this);
-  if (rc != 0) {
-    ESP_LOGE(TAG, "ble_l2cap_create_server failed: %d", rc);
-  }
 }
 
 void FipsBleL2cap::on_gap_disconnect(uint16_t conn_handle, int reason) {
