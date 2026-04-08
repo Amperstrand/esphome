@@ -324,6 +324,11 @@ void FipsBleL2cap::on_l2cap_connected(int status, uint16_t conn_handle, struct b
     return;
   }
 
+  if (this->l2cap_chan_ != nullptr) {
+    ESP_LOGW(TAG, "rejecting additional CoC, already have active channel");
+    return;
+  }
+
   this->l2cap_chan_ = chan;
   this->state_ = L2capState::L2CAP_CONNECTED;
 
@@ -340,12 +345,19 @@ void FipsBleL2cap::on_l2cap_connected(int status, uint16_t conn_handle, struct b
 }
 
 void FipsBleL2cap::on_l2cap_disconnected(uint16_t conn_handle, struct ble_l2cap_chan *chan) {
-  ESP_LOGI(TAG, "L2CAP CoC disconnected");
-  this->l2cap_chan_ = nullptr;
-  this->state_ = L2capState::DISCONNECTED;
+  ESP_LOGI(TAG, "L2CAP CoC disconnected, handle=%d", conn_handle);
+  if (chan == this->l2cap_chan_) {
+    this->l2cap_chan_ = nullptr;
+    this->state_ = L2capState::DISCONNECTED;
+  }
 }
 
 void FipsBleL2cap::on_l2cap_data_received(struct ble_l2cap_chan *chan, struct os_mbuf *sdu_rx) {
+  if (chan != this->l2cap_chan_) {
+    os_mbuf_free_chain(sdu_rx);
+    return;
+  }
+
   if (sdu_rx == nullptr) {
     this->on_l2cap_accept(this->conn_handle_, this->peer_mtu_, chan);
     return;
