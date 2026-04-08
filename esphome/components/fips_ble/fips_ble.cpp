@@ -89,8 +89,11 @@ void FipsBleComponent::setup() {
   }
 
   esp_fill_random(this->eph_secret_.data(), PRIVKEY_SIZE);
-  while (!ecdh_pubkey(this->eph_secret_.data(), this->eph_secret_.data())) {
-    esp_fill_random(this->eph_secret_.data(), PRIVKEY_SIZE);
+  {
+    std::array<uint8_t, PUBKEY_SIZE> test_pub{};
+    while (!ecdh_pubkey(this->eph_secret_.data(), test_pub.data())) {
+      esp_fill_random(this->eph_secret_.data(), PRIVKEY_SIZE);
+    }
   }
 
   if (this->selftest_) {
@@ -229,7 +232,14 @@ bool FipsBleComponent::send_msg1() {
 
   this->last_msg1_sent_ = millis();
   this->msg1_resend_count_++;
-  ESP_LOGI(TAG, "MSG1 sent (attempt %u)", this->msg1_resend_count_);
+  ESP_LOGI(TAG, "MSG1 sent (attempt %u, noise_len=%u, fmp_len=%u)", this->msg1_resend_count_, noise_len,
+            this->msg1_len_);
+  ESP_LOGD(TAG, "  peer_pub: %02x%02x..%02x%02x", this->peer_pub_[0], this->peer_pub_[1], this->peer_pub_[31],
+            this->peer_pub_[32]);
+  ESP_LOGD(TAG, "  eph_secret: %02x%02x..%02x%02x", this->eph_secret_[0], this->eph_secret_[1],
+            this->eph_secret_[30], this->eph_secret_[31]);
+  ESP_LOGD(TAG, "  identity_pub: %02x%02x..%02x%02x", this->identity_pub_[0], this->identity_pub_[1],
+            this->identity_pub_[31], this->identity_pub_[32]);
   return true;
 }
 
