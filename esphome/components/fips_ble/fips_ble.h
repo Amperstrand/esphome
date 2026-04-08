@@ -18,6 +18,7 @@ static const char *const TAG = "fips_ble";
 
 static constexpr uint32_t HB_INTERVAL_MS = 10000;
 static constexpr uint32_t RECV_TIMEOUT_MS = 30000;
+static constexpr uint32_t MSG1_DELAY_MS = 2000;
 static constexpr uint32_t MSG1_RESEND_MS = 3000;
 static constexpr uint32_t MSG1_RESEND_MAX = 10;
 static constexpr uint8_t MAX_COMPETING_MSG1 = 3;

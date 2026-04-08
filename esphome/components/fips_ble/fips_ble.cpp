@@ -145,19 +145,23 @@ void FipsBleComponent::loop() {
     this->start_link_handshake();
   }
 
+  if (this->state_ == FipsState::LINK_ESTABLISHED || this->state_ == FipsState::LINK_HANDSHAKE) {
+    this->handle_received_data();
+  }
+
   if (this->state_ == FipsState::LINK_HANDSHAKE) {
     uint32_t now = millis();
-    if (now - this->last_msg1_sent_ > MSG1_RESEND_MS) {
+    if (this->last_msg1_sent_ == 0) {
+      if (now - this->last_activity_ > MSG1_DELAY_MS) {
+        this->send_msg1();
+      }
+    } else if (now - this->last_msg1_sent_ > MSG1_RESEND_MS) {
       if (this->msg1_resend_count_ < MSG1_RESEND_MAX) {
         this->send_msg1();
       } else {
         this->handle_error("handshake timeout");
       }
     }
-  }
-
-  if (this->state_ == FipsState::LINK_ESTABLISHED || this->state_ == FipsState::LINK_HANDSHAKE) {
-    this->handle_received_data();
   }
 
   if (this->state_ == FipsState::LINK_ESTABLISHED) {
@@ -199,7 +203,8 @@ bool FipsBleComponent::start_link_handshake() {
   this->recv_counter_ = 0;
   this->rx_buf_len_ = 0;
   this->rx_buf_pos_ = 0;
-  return this->send_msg1();
+  this->last_msg1_sent_ = 0;
+  return true;
 }
 
 bool FipsBleComponent::send_msg1() {
