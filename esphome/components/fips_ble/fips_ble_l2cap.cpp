@@ -141,7 +141,14 @@ void FipsBleL2cap::loop() {
     this->rx_buf_len_ = 0;
     this->rx_buf_pos_ = 0;
     this->rx_frame_ready_ = false;
-    this->start_advertising();
+    this->rx_frame_len_ = 0;
+    if (this->disconnect_time_ == 0) {
+      this->disconnect_time_ = millis();
+    }
+    if (millis() - this->disconnect_time_ >= 500) {
+      this->disconnect_time_ = 0;
+      this->start_advertising();
+    }
     return;
   }
 
@@ -153,11 +160,11 @@ void FipsBleL2cap::loop() {
     }
 
     if (!this->pubkey_recv_ && this->rx_frame_ready_ && this->rx_frame_len_ == 33) {
-      uint8_t prefix = this->rx_buf_[this->rx_buf_pos_];
+      uint8_t prefix = this->rx_buf_[this->rx_buf_pos_ + 2];
       if (prefix == 0x00) {
         this->peer_pub_[0] = 0x02;
-        std::memcpy(this->peer_pub_.data() + 1, this->rx_buf_.data() + this->rx_buf_pos_ + 1, 32);
-        this->rx_buf_pos_ += 33;
+        std::memcpy(this->peer_pub_.data() + 1, this->rx_buf_.data() + this->rx_buf_pos_ + 3, 32);
+        this->rx_buf_pos_ += 2 + 33;
         this->rx_frame_ready_ = false;
         this->rx_frame_len_ = 0;
         if (this->rx_buf_pos_ >= this->rx_buf_len_) {
@@ -202,7 +209,12 @@ bool FipsBleL2cap::send(const uint8_t *data, size_t len) {
   if (this->state_ != L2capState::READY || this->l2cap_chan_ == nullptr)
     return false;
 
-  if (len > this->peer_mtu_)
+  // Length-prefix framing: [len:2 BE][payload]
+  // Required for interop with FIPS daemon (rev 42d9adb+) which uses this
+  // framing for cross-platform compatibility (macOS CoreBluetooth coalesces
+  // byte streams). Linux BlueZ SeqPacket also uses it now.
+  size_t framed_len = 2 + len;
+  if (framed_len > this->peer_mtu_)
     return false;
 
   struct os_mbuf *sdu_tx = this->alloc_sdu_tx();
@@ -211,7 +223,18 @@ bool FipsBleL2cap::send(const uint8_t *data, size_t len) {
     return false;
   }
 
-  int rc = os_mbuf_append(sdu_tx, data, len);
+  uint8_t len_prefix[2];
+  len_prefix[0] = static_cast<uint8_t>((len >> 8) & 0xFF);
+  len_prefix[1] = static_cast<uint8_t>(len & 0xFF);
+
+  int rc = os_mbuf_append(sdu_tx, len_prefix, 2);
+  if (rc != 0) {
+    os_mbuf_free_chain(sdu_tx);
+    ESP_LOGE(TAG, "os_mbuf_append len prefix failed: %d", rc);
+    return false;
+  }
+
+  rc = os_mbuf_append(sdu_tx, data, len);
   if (rc != 0) {
     os_mbuf_free_chain(sdu_tx);
     ESP_LOGE(TAG, "os_mbuf_append failed: %d", rc);
@@ -237,14 +260,27 @@ bool FipsBleL2cap::send(const uint8_t *data, size_t len) {
 bool FipsBleL2cap::send_raw(const uint8_t *data, size_t len) {
   if (this->l2cap_chan_ == nullptr)
     return false;
-  if (len > this->peer_mtu_)
+
+  // Length-prefix framing: [len:2 BE][payload] — same as send()
+  size_t framed_len = 2 + len;
+  if (framed_len > this->peer_mtu_)
     return false;
 
   struct os_mbuf *sdu_tx = this->alloc_sdu_tx();
   if (sdu_tx == nullptr)
     return false;
 
-  int rc = os_mbuf_append(sdu_tx, data, len);
+  uint8_t len_prefix[2];
+  len_prefix[0] = static_cast<uint8_t>((len >> 8) & 0xFF);
+  len_prefix[1] = static_cast<uint8_t>(len & 0xFF);
+
+  int rc = os_mbuf_append(sdu_tx, len_prefix, 2);
+  if (rc != 0) {
+    os_mbuf_free_chain(sdu_tx);
+    return false;
+  }
+
+  rc = os_mbuf_append(sdu_tx, data, len);
   if (rc != 0) {
     os_mbuf_free_chain(sdu_tx);
     return false;
@@ -264,15 +300,29 @@ int FipsBleL2cap::recv(uint8_t *buf, size_t buf_len) {
   if (!this->rx_frame_ready_)
     return -1;
 
+  // Payload starts after 2-byte length prefix
+  size_t payload_offset = this->rx_buf_pos_ + 2;
   size_t copy_len = this->rx_frame_len_;
   if (copy_len > buf_len)
     copy_len = buf_len;
 
-  std::memcpy(buf, this->rx_buf_.data() + this->rx_buf_pos_, copy_len);
+  std::memcpy(buf, this->rx_buf_.data() + payload_offset, copy_len);
 
-  this->rx_buf_pos_ += this->rx_frame_len_;
+  // Advance past [2-byte prefix][payload]
+  this->rx_buf_pos_ += 2 + this->rx_frame_len_;
   this->rx_frame_ready_ = false;
   this->rx_frame_len_ = 0;
+
+  // Try to extract next complete frame from remaining buffer
+  size_t available = this->rx_buf_len_ - this->rx_buf_pos_;
+  if (available >= 2) {
+    uint16_t next_len = static_cast<uint16_t>(this->rx_buf_[this->rx_buf_pos_]) |
+                         (static_cast<uint16_t>(this->rx_buf_[this->rx_buf_pos_ + 1]) << 8);
+    if (available >= 2 + next_len && next_len > 0) {
+      this->rx_frame_ready_ = true;
+      this->rx_frame_len_ = next_len;
+    }
+  }
 
   if (this->rx_buf_pos_ >= this->rx_buf_len_) {
     this->rx_buf_len_ = 0;
@@ -299,6 +349,7 @@ void FipsBleL2cap::on_gap_disconnect(uint16_t conn_handle, int reason) {
   this->conn_handle_ = 0;
   this->l2cap_chan_ = nullptr;
   this->state_ = L2capState::DISCONNECTED;
+  this->disconnect_time_ = millis();
 }
 
 void FipsBleL2cap::on_l2cap_accept(uint16_t conn_handle, uint16_t peer_sdu_size, struct ble_l2cap_chan *chan) {
@@ -374,6 +425,7 @@ void FipsBleL2cap::on_l2cap_data_received(struct ble_l2cap_chan *chan, struct os
     this->rx_buf_len_ = 0;
     this->rx_buf_pos_ = 0;
     this->rx_frame_ready_ = false;
+    this->rx_frame_len_ = 0;
     os_mbuf_free_chain(sdu_rx);
     this->on_l2cap_accept(this->conn_handle_, this->peer_mtu_, chan);
     return;
@@ -391,9 +443,19 @@ void FipsBleL2cap::on_l2cap_data_received(struct ble_l2cap_chan *chan, struct os
   os_mbuf_free_chain(sdu_rx);
   this->last_activity_ = millis();
 
-  if (this->rx_buf_len_ > 0) {
-    this->rx_frame_ready_ = true;
-    this->rx_frame_len_ = this->rx_buf_len_ - this->rx_buf_pos_;
+  // Length-prefix framing: try to extract complete [len:2 BE][payload] frame.
+  // Only signal rx_frame_ready when we have a full frame (prefix + payload).
+  // The payload is at rx_buf_[rx_buf_pos_ + 2 .. rx_buf_pos_ + 2 + frame_len].
+  if (!this->rx_frame_ready_) {
+    size_t available = this->rx_buf_len_ - this->rx_buf_pos_;
+    if (available >= 2) {
+      uint16_t frame_len = static_cast<uint16_t>(this->rx_buf_[this->rx_buf_pos_]) |
+                           (static_cast<uint16_t>(this->rx_buf_[this->rx_buf_pos_ + 1]) << 8);
+      if (frame_len > 0 && available >= 2 + frame_len) {
+        this->rx_frame_ready_ = true;
+        this->rx_frame_len_ = frame_len;
+      }
+    }
   }
 
   this->on_l2cap_accept(this->conn_handle_, this->peer_mtu_, chan);

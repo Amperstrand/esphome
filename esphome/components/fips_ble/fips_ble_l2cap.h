@@ -87,6 +87,7 @@ class FipsBleL2cap {
   size_t rx_frame_len_{0};
 
   uint32_t pubkey_exchange_start_{0};
+  uint32_t disconnect_time_{0};
   bool pubkey_sent_{false};
   bool pubkey_recv_{false};
 };

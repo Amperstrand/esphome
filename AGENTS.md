@@ -164,6 +164,40 @@ Key config files:
 - `/etc/fips/fips.key` — daemon nsec key
 - `/etc/fips/fips.yaml.bak` — backup with peers section
 
+### Daemon Version (as of 2026-04-09)
+
+Running: `fips 0.3.0-dev (rev 42d9adb46b)`, binary at `/usr/local/bin/fips`.
+Source: `/home/ubuntu/src/fips` (local clone).
+
+Key protocol features in this version:
+- 2-byte BE length-prefix framing on all BLE sends/receives
+- Epoch-based peer restart detection (8-byte encrypted epoch in IK handshake)
+- Role-based asymmetric pubkey exchange (Initiator sends first, Responder receives first)
+- Continuous BLE advertising (not burst pattern)
+- Rekey every ~2-3 minutes
+- BLE capability signaling (ServiceData16 with UUID 0x4649 "FI")
+
+### FIPS Daemon Active Config
+
+Current `/etc/fips/fips.yaml` (no peers section — accepts any initiator):
+```yaml
+node:
+  identity:
+    persistent: true
+  log_level: debug
+tun:
+  enabled: true
+  name: fips0
+  mtu: 1280
+dns:
+  enabled: false
+transports:
+  ble:
+    adapter: hci0
+  udp:
+    bind_addr: "0.0.0.0:2121"
+```
+
 ### Peer configuration (IMPORTANT for testing)
 
 When `peers:` is configured, the daemon **only accepts MSG1 from listed identities**. This prevents the D0WD (or any rogue device) from hijacking the S3's peer slot. Configure the S3 as the sole known peer:
@@ -231,8 +265,111 @@ INNER_HEADER_SIZE = 5       (timestamp=4 + msg_type=1)
 payload_len for phase=0: inner_plaintext size ONLY
 payload_len for phase=1/2: noise payload size
 
-No 2-byte L2CAP length prefix — FIPS sends raw FMP frames over CoC.
+2-byte L2CAP length prefix REQUIRED on all BLE frames: [len:2 BE][payload]
+Both send and recv must include/strip this prefix. The daemon (rev 42d9adb)
+uses this framing for cross-platform compatibility (macOS CoreBluetooth 
+coalesces byte streams). Linux BlueZ SeqPacket also uses it now.
 ```
+
+## BLE Transport Layer
+
+### Length-Prefix Framing (MANDATORY)
+
+All BLE L2CAP CoC frames use 2-byte big-endian length-prefix framing:
+```
+Wire format: [len_hi][len_lo][payload...]
+```
+
+The ESP32 (peripheral/responder) MUST:
+1. **Send**: prepend `(payload.len() as u16).to_be_bytes()` to every frame
+2. **Receive**: parse 2-byte BE length, extract payload, handle partial frames across multiple L2CAP SDUs
+
+This framing is applied at the transport layer (fips_ble_l2cap.cpp) so higher-level
+code (FMP, Noise) is unaware of it. Both `send()` and `send_raw()` add the prefix;
+`recv()` and the data handler strip it.
+
+### BLE Service UUID
+
+```
+9c90b790-2cc5-42c0-9f87-c9cc-4064-8f4c
+```
+Derived from SHA-256("FIPS: welcome to cryptoanarchy") with UUID v4 version/variant bits.
+
+### BLE Capability Flags
+
+Scan response includes ServiceData16 with UUID `0x4649` ("FI") and capability byte:
+- `0x01` = LEAF_ONLY (should not be preferred as routing parent)
+- `0x02` = HAS_TUN (can route IP traffic)
+- `0x04` = HAS_INTERNET (provides gateway access)
+
+### Pubkey Exchange
+
+Role-based asymmetric exchange to prevent race conditions:
+- **Initiator** (daemon, outbound connection): sends `[0x00][x_only_pubkey:32]` first
+- **Responder** (ESP32, inbound connection): receives first, then sends own pubkey
+- Total message: 33 bytes (1 prefix + 32 x-coordinate bytes)
+- With length-prefix framing: 35 bytes on wire `[0x00, 0x21][0x00][x_only_pubkey:32]`
+- Timeout: 5 seconds
+
+### L2CAP CoC Parameters
+
+- PSM: `0x0085` (133 decimal)
+- MTU: 512 bytes (negotiated; daemon may request up to 2048)
+- Address type: LeRandom (ESP32 uses static random address)
+
+### Re-advertisement Delay
+
+After BLE disconnect, wait 500ms before re-advertising. This prevents BLE stack
+teardown race conditions that cause "Connection reset by peer" errors.
+
+## Upstream Protocol Changes (2026-04)
+
+Summary of recent changes in Amperstrand/microfips and Amperstrand/fips that
+affect this ESPHome component.
+
+### microfips (ESP32 firmware reference implementation)
+
+| Commit | Change | Impact |
+|--------|--------|--------|
+| `9e9f451` | Fix payload_len to use inner_plaintext size | Already implemented |
+| `ba9f07c` | MSG1 resend with 3s timeout, max 10 retries | Already implemented |
+| `f7dd45f` | Noise IK tie-breaker via NodeAddr comparison | Already implemented |
+| `aed9031` | Ignore MSG1 from configured peer in competing count | Already implemented |
+| `1460d60` | BLE capability flags in scan response | Already implemented |
+| `0f0a4ee` | Per-handshake epoch counter (wrapping u64) | Already implemented |
+| `2d59607` | Peripheral-only mode (removed central/scan) | Already implemented |
+| `4ce78e9` | 500ms re-advertisement delay after disconnect | Implemented |
+| `38e33b7` | Removed deferred link readiness | N/A (was never implemented here) |
+
+### FIPS daemon (Linux responder)
+
+| Commit | Change | Status |
+|--------|--------|--------|
+| `5c810f4` | 2-byte BE length-prefix framing on all BLE | **MUST implement** |
+| `42d9adb` | Recv buffer for cross-platform frame reassembly | Daemon-side, transparent |
+| `fa09d65` | BLE peer capability signaling | Info only |
+| `f920526` | Epoch-based peer restart detection | Already implemented |
+| Various | Role-based asymmetric pubkey exchange | Already implemented |
+| `db95498` | BLE transport reliability improvements | Info only |
+| `d801fd0` | Continuous advertising | Already implemented |
+
+### Future Changes (NOT yet in master)
+
+| Branch | Change | Impact |
+|--------|--------|--------|
+| `noise-xx-and-version-negotiation` | IK → XX handshake (3 messages) | Major breaking change |
+| `macos-ble` | Already merged to master via `5c810f4` | Length-prefix framing (done) |
+
+### Open Issues (tracked upstream)
+
+| Repo | Issue | Topic |
+|------|-------|-------|
+| fips | #29 | BLE per-transport send rate limiting |
+| fips | #21 | FMP payload_len wire format convention (documentation) |
+| fips | #23 | ESPHome Noise IK handshake completion |
+| microfips | #71 | FIPS stale session state blocks reconnection |
+| microfips | #72 | BLE scan-cycle starvation |
+| microfips | #26 | Noise deviations D1-D3 documentation |
 
 ## Build and Test
 
@@ -240,7 +377,7 @@ No 2-byte L2CAP length prefix — FIPS sends raw FMP frames over CoC.
 # Compile
 PYTHONPATH=/home/ubuntu/src/esphome python3 -m esphome compile /tmp/esphome-flash/fips-esp32s3.yaml
 
-# Python golden vector tests (48 tests, all should pass)
+# Python golden vector tests (48 embedded C++ tests + Python reference tests)
 python3 -m pytest tests/test_fips_ble_golden_vectors/test_golden_vectors.py -v
 
 # Component build test
