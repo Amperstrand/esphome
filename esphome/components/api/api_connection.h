@@ -367,6 +367,7 @@ class APIConnection final : public APIServerConnectionBase {
   const char *get_peername_to(std::span<char, socket::SOCKADDR_STR_LEN> buf) const {
     return this->helper_->get_peername_to(buf);
   }
+  bool is_local_connection() const;
 
  protected:
   bool try_to_clear_buffer_slow_(bool log_out_of_space);

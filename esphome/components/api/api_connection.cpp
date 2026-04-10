@@ -77,6 +77,29 @@ static const char *const TAG = "api.connection";
 static const int CAMERA_STOP_STREAM = 5000;
 #endif
 
+bool APIConnection::is_local_connection() const {
+  struct sockaddr_storage storage;
+  socklen_t len = sizeof(storage);
+  if (this->helper_->getpeername(reinterpret_cast<struct sockaddr *>(&storage), &len) != 0) {
+    return false;
+  }
+
+  if (storage.ss_family == AF_INET) {
+    auto *addr4 = reinterpret_cast<const struct sockaddr_in *>(&storage);
+    return (ntohl(addr4->sin_addr.s_addr) >> 24) == 127;
+  }
+
+#if LWIP_IPV6
+  if (storage.ss_family == AF_INET6) {
+    auto *addr6 = reinterpret_cast<const sockaddr_in6 *>(&storage);
+    return addr6->sin6_addr.un.u32_addr[0] == 0 && addr6->sin6_addr.un.u32_addr[1] == 0 &&
+           addr6->sin6_addr.un.u32_addr[2] == 0 && addr6->sin6_addr.un.u32_addr[3] == htonl(1);
+  }
+#endif
+
+  return false;
+}
+
 #ifdef USE_DEVICES
 // Helper macro for entity command handlers - gets entity by key and device_id, returns if not found, and creates call
 // object

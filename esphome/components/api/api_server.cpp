@@ -134,8 +134,10 @@ void APIServer::loop() {
   // Process clients and remove disconnected ones in a single pass
   // Check network connectivity once for all clients
   if (!network::is_connected()) {
-    // Network is down - disconnect all clients
     for (auto &client : this->clients_) {
+      if (client->is_local_connection()) {
+        continue;
+      }
       client->on_fatal_error();
       client->log_client_(ESPHOME_LOG_LEVEL_WARN, LOG_STR("Network down; disconnect"));
     }
