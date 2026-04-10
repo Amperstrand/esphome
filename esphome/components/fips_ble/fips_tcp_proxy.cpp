@@ -4,30 +4,27 @@
 #include "fips_ble_l2cap.h"
 #include "esphome/core/log.h"
 
-#include <cstring>
 #include <cerrno>
+#include <cstring>
 
-#include <lwip/sockets.h>
 #include <lwip/inet.h>
 #include <lwip/ip_addr.h>
+#include <lwip/sockets.h>
 
 namespace esphome::fips_ble {
 
 static const char *const TAG = "fips_ble.tcp_proxy";
 
-void FipsTcpProxy::setup(FipsBleL2cap *l2cap, uint16_t listen_port) {
+void FipsTcpProxy::setup(FipsBleL2cap *l2cap, uint16_t api_port) {
   this->l2cap_ = l2cap;
-  this->listen_port_ = listen_port;
-
-  for (size_t i = 0; i < MAX_TCP_CLIENTS; i++) {
-    this->client_fds_[i] = -1;
-  }
+  this->api_port_ = api_port;
+  this->api_fd_ = -1;
+  this->pending_outbound_len_ = 0;
 }
 
-bool FipsTcpProxy::listen_on(uint16_t port) {
-  if (this->listen_fd_ >= 0) {
-    close(this->listen_fd_);
-    this->listen_fd_ = -1;
+bool FipsTcpProxy::connect_to_api() {
+  if (this->api_fd_ >= 0) {
+    return true;
   }
 
   int fd = lwip_socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
@@ -36,141 +33,115 @@ bool FipsTcpProxy::listen_on(uint16_t port) {
     return false;
   }
 
-  int opt = 1;
-  lwip_setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
-
   struct sockaddr_in addr;
   std::memset(&addr, 0, sizeof(addr));
   addr.sin_family = AF_INET;
   addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-  addr.sin_port = htons(port);
+  addr.sin_port = htons(this->api_port_);
 
-  if (lwip_bind(fd, (struct sockaddr *) &addr, sizeof(addr)) < 0) {
-    ESP_LOGE(TAG, "bind() failed: %d", errno);
-    close(fd);
+  if (lwip_connect(fd, reinterpret_cast<struct sockaddr *>(&addr), sizeof(addr)) < 0) {
+    ESP_LOGW(TAG, "connect() to 127.0.0.1:%u failed: %d", this->api_port_, errno);
+    lwip_close(fd);
     return false;
   }
 
-  if (lwip_listen(fd, 2) < 0) {
-    ESP_LOGE(TAG, "listen() failed: %d", errno);
-    close(fd);
+  int nonblocking = 1;
+  if (lwip_ioctl(fd, FIONBIO, &nonblocking) < 0) {
+    ESP_LOGW(TAG, "ioctl(FIONBIO) failed: %d", errno);
+    lwip_close(fd);
     return false;
   }
 
-  this->listen_fd_ = fd;
-  ESP_LOGI(TAG, "listening on 127.0.0.1:%d", port);
+  this->api_fd_ = fd;
+  ESP_LOGI(TAG, "connected to API on 127.0.0.1:%u", this->api_port_);
   return true;
 }
 
-void FipsTcpProxy::loop() {
-  if (!this->tcp_setup_done_) {
-    if (this->listen_on(this->listen_port_)) {
-      this->tcp_setup_done_ = true;
-    } else {
-      return;
-    }
+void FipsTcpProxy::read_from_api() {
+  if (this->api_fd_ < 0 || this->pending_outbound_len_ > 0) {
+    return;
   }
-
-  if (this->l2cap_ == nullptr || !this->l2cap_->is_ready())
-    return;
-
-  this->accept_client();
-  this->forward_tcp_to_fips();
-}
-
-void FipsTcpProxy::accept_client() {
-  if (this->listen_fd_ < 0)
-    return;
 
   fd_set read_fds;
   FD_ZERO(&read_fds);
-  FD_SET(this->listen_fd_, &read_fds);
+  FD_SET(this->api_fd_, &read_fds);
   struct timeval tv = {0, 0};
 
-  int ret = lwip_select(this->listen_fd_ + 1, &read_fds, nullptr, nullptr, &tv);
-  if (ret <= 0)
-    return;
-
-  int client_fd = lwip_accept(this->listen_fd_, nullptr, nullptr);
-  if (client_fd < 0) {
-    ESP_LOGE(TAG, "accept() failed: %d", errno);
+  int ret = lwip_select(this->api_fd_ + 1, &read_fds, nullptr, nullptr, &tv);
+  if (ret < 0) {
+    ESP_LOGW(TAG, "select() failed: %d", errno);
+    this->disconnect_api();
     return;
   }
 
-  bool accepted = false;
-  for (size_t i = 0; i < MAX_TCP_CLIENTS; i++) {
-    if (this->client_fds_[i] < 0) {
-      this->client_fds_[i] = client_fd;
-      accepted = true;
-      ESP_LOGI(TAG, "client connected, fd=%d", client_fd);
-      break;
-    }
+  if (ret == 0 || !FD_ISSET(this->api_fd_, &read_fds)) {
+    return;
   }
 
-  if (!accepted) {
-    ESP_LOGW(TAG, "max clients reached, rejecting fd=%d", client_fd);
-    close(client_fd);
+  ssize_t received = lwip_recv(this->api_fd_, this->pending_outbound_, TCP_PROXY_BUF_SIZE, 0);
+  if (received > 0) {
+    this->pending_outbound_len_ = static_cast<size_t>(received);
+    return;
+  }
+
+  if (received == 0) {
+    ESP_LOGI(TAG, "API connection closed");
+    this->disconnect_api();
+  } else if (errno != EAGAIN && errno != EWOULDBLOCK) {
+    ESP_LOGW(TAG, "recv() failed: %d", errno);
+    this->disconnect_api();
   }
 }
 
-void FipsTcpProxy::forward_tcp_to_fips() {
-  // If we already have pending data, don't read more
-  if (this->pending_outbound_len_ > 0)
-    return;
-
-  for (size_t i = 0; i < MAX_TCP_CLIENTS; i++) {
-    int fd = this->client_fds_[i];
-    if (fd < 0)
-      continue;
-
-    fd_set read_fds;
-    FD_ZERO(&read_fds);
-    FD_SET(fd, &read_fds);
-    struct timeval tv = {0, 1000};
-
-    int ret = lwip_select(fd + 1, &read_fds, nullptr, nullptr, &tv);
-    if (ret <= 0)
-      continue;
-
-    ssize_t n = lwip_recv(fd, this->pending_outbound_, TCP_PROXY_BUF_SIZE, 0);
-    if (n <= 0) {
-      ESP_LOGI(TAG, "client disconnected, fd=%d", fd);
-      close(fd);
-      this->client_fds_[i] = -1;
-      continue;
-    }
-
-    this->pending_outbound_len_ = static_cast<size_t>(n);
-    break;  // Only read from one client per loop iteration
+void FipsTcpProxy::disconnect_api() {
+  if (this->api_fd_ >= 0) {
+    lwip_close(this->api_fd_);
+    this->api_fd_ = -1;
   }
+
+  this->pending_outbound_len_ = 0;
+}
+
+void FipsTcpProxy::loop() {
+  if (this->l2cap_ == nullptr || !this->l2cap_->is_ready()) {
+    if (this->api_fd_ >= 0) {
+      ESP_LOGI(TAG, "BLE link not ready, disconnecting API socket");
+      this->disconnect_api();
+    }
+    return;
+  }
+
+  if (this->api_fd_ < 0 && !this->connect_to_api()) {
+    return;
+  }
+
+  this->read_from_api();
 }
 
 void FipsTcpProxy::stop() {
-  for (size_t i = 0; i < MAX_TCP_CLIENTS; i++) {
-    if (this->client_fds_[i] >= 0) {
-      close(this->client_fds_[i]);
-      this->client_fds_[i] = -1;
-    }
-  }
-
-  if (this->listen_fd_ >= 0) {
-    close(this->listen_fd_);
-    this->listen_fd_ = -1;
-  }
+  this->disconnect_api();
 }
 
 void FipsTcpProxy::forward_to_tcp(const uint8_t *data, size_t len) {
-  for (size_t i = 0; i < MAX_TCP_CLIENTS; i++) {
-    int fd = this->client_fds_[i];
-    if (fd < 0)
-      continue;
+  if (len == 0) {
+    return;
+  }
 
-    ssize_t sent = lwip_send(fd, data, len, 0);
-    if (sent < 0) {
-      ESP_LOGW(TAG, "forward to client fd=%d failed: %d", fd, errno);
-      close(fd);
-      this->client_fds_[i] = -1;
+  if (this->api_fd_ < 0 && !this->connect_to_api()) {
+    ESP_LOGW(TAG, "dropping %u bytes, API connect failed", static_cast<unsigned>(len));
+    return;
+  }
+
+  size_t total_sent = 0;
+  while (total_sent < len) {
+    ssize_t sent = lwip_send(this->api_fd_, data + total_sent, len - total_sent, 0);
+    if (sent <= 0) {
+      ESP_LOGW(TAG, "send() failed: %d", errno);
+      this->disconnect_api();
+      return;
     }
+
+    total_sent += static_cast<size_t>(sent);
   }
 }
 
