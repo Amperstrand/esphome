@@ -56,6 +56,7 @@ class FipsBleL2cap {
   int recv(uint8_t *buf, size_t buf_len);
 
   const uint8_t *get_peer_pub() const { return this->peer_pub_.data(); }
+  uint8_t peer_caps() const { return this->peer_caps_; }
   uint16_t get_conn_handle() const { return this->conn_handle_; }
   uint16_t get_peer_mtu() const { return this->peer_mtu_; }
 
@@ -83,6 +84,7 @@ class FipsBleL2cap {
 
   std::array<uint8_t, 33> peer_pub_{};
   std::array<uint8_t, 33> own_pub_{};
+  uint8_t peer_caps_{0};
   std::array<uint8_t, 6> allowed_peer_mac_{};
   bool has_peer_mac_{false};
 

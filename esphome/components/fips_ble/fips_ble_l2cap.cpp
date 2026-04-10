@@ -158,6 +158,7 @@ void FipsBleL2cap::loop() {
     this->rx_buf_pos_ = 0;
     this->rx_frame_ready_ = false;
     this->rx_frame_len_ = 0;
+    this->peer_caps_ = 0;
     if (this->disconnect_time_ == 0) {
       this->disconnect_time_ = millis();
     }
@@ -180,6 +181,9 @@ void FipsBleL2cap::loop() {
       if (prefix == 0x00) {
         this->peer_pub_[0] = 0x02;
         std::memcpy(this->peer_pub_.data() + 1, this->rx_buf_.data() + this->rx_buf_pos_ + 3, 32);
+        if (this->rx_frame_len_ >= 34) {
+          this->peer_caps_ = this->rx_buf_[this->rx_buf_pos_ + 35];
+        }
         this->rx_buf_pos_ += 2 + this->rx_frame_len_;
         this->rx_frame_ready_ = false;
         this->rx_frame_len_ = 0;

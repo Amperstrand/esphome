@@ -335,7 +335,10 @@ bool FipsBleComponent::process_fmp_frame(const uint8_t *data, size_t len) {
       uint8_t peer_node_addr[HASH_SIZE];
       node_addr_from_pubkey(this->peer_pub_.data(), peer_node_addr);
 
-      if (std::memcmp(my_node_addr, peer_node_addr, 16) >= 0)
+      static constexpr uint8_t PEER_CAP_CENTRAL_ONLY = 0x01;
+      bool peer_is_central_only = (this->l2cap_.peer_caps() & PEER_CAP_CENTRAL_ONLY) != 0;
+
+      if (!peer_is_central_only && std::memcmp(my_node_addr, peer_node_addr, 16) >= 0)
         return true;
 
       this->competing_msg1_count_++;
