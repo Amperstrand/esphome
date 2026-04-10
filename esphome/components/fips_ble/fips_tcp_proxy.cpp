@@ -75,8 +75,7 @@ void FipsTcpProxy::loop() {
     return;
 
   this->accept_client();
-  this->forward_tcp_to_fips(-1);
-  this->forward_fips_to_tcp();
+  this->forward_tcp_to_fips();
 }
 
 void FipsTcpProxy::accept_client() {
@@ -114,7 +113,11 @@ void FipsTcpProxy::accept_client() {
   }
 }
 
-void FipsTcpProxy::forward_tcp_to_fips(int client_fd) {
+void FipsTcpProxy::forward_tcp_to_fips() {
+  // If we already have pending data, don't read more
+  if (this->pending_outbound_len_ > 0)
+    return;
+
   for (size_t i = 0; i < MAX_TCP_CLIENTS; i++) {
     int fd = this->client_fds_[i];
     if (fd < 0)
@@ -129,8 +132,7 @@ void FipsTcpProxy::forward_tcp_to_fips(int client_fd) {
     if (ret <= 0)
       continue;
 
-    uint8_t buf[TCP_PROXY_BUF_SIZE];
-    ssize_t n = lwip_recv(fd, buf, sizeof(buf), 0);
+    ssize_t n = lwip_recv(fd, this->pending_outbound_, TCP_PROXY_BUF_SIZE, 0);
     if (n <= 0) {
       ESP_LOGI(TAG, "client disconnected, fd=%d", fd);
       close(fd);
@@ -138,29 +140,8 @@ void FipsTcpProxy::forward_tcp_to_fips(int client_fd) {
       continue;
     }
 
-    if (!this->l2cap_->send(buf, static_cast<size_t>(n))) {
-      ESP_LOGW(TAG, "failed to forward %d bytes to FIPS", static_cast<int>(n));
-    }
-  }
-}
-
-void FipsTcpProxy::forward_fips_to_tcp() {
-  uint8_t buf[TCP_PROXY_BUF_SIZE];
-  int n = this->l2cap_->recv(buf, sizeof(buf));
-  if (n <= 0)
-    return;
-
-  for (size_t i = 0; i < MAX_TCP_CLIENTS; i++) {
-    int fd = this->client_fds_[i];
-    if (fd < 0)
-      continue;
-
-    ssize_t sent = lwip_send(fd, buf, static_cast<size_t>(n), 0);
-    if (sent < 0) {
-      ESP_LOGW(TAG, "send to client fd=%d failed: %d", fd, errno);
-      close(fd);
-      this->client_fds_[i] = -1;
-    }
+    this->pending_outbound_len_ = static_cast<size_t>(n);
+    break;  // Only read from one client per loop iteration
   }
 }
 

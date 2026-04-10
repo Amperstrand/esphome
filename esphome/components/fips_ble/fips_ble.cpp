@@ -174,6 +174,12 @@ void FipsBleComponent::loop() {
       this->handle_error("recv timeout");
     }
     this->tcp_proxy_.loop();
+    // Drain TCP proxy outbound data through FMP
+    if (this->tcp_proxy_.has_pending_outbound()) {
+      this->send_established_msg(0x60, this->tcp_proxy_.pending_outbound_data(),
+                                 this->tcp_proxy_.pending_outbound_length());
+      this->tcp_proxy_.clear_pending_outbound();
+    }
   }
 
   if (this->state_ == FipsState::ERROR) {
@@ -426,6 +432,10 @@ bool FipsBleComponent::process_fmp_frame(const uint8_t *data, size_t len) {
         if (dst_port == this->api_port_ && datagram_payload != nullptr && datagram_len > 0) {
           this->tcp_proxy_.forward_to_tcp(datagram_payload, datagram_len);
         }
+      }
+
+      if (msg_type == 0x60 && payload_len > 0) {
+        this->tcp_proxy_.forward_to_tcp(payload, payload_len);
       }
 
       return true;

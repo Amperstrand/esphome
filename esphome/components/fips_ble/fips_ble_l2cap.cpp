@@ -159,12 +159,12 @@ void FipsBleL2cap::loop() {
       return;
     }
 
-    if (!this->pubkey_recv_ && this->rx_frame_ready_ && this->rx_frame_len_ == 33) {
+    if (!this->pubkey_recv_ && this->rx_frame_ready_ && this->rx_frame_len_ >= 33) {
       uint8_t prefix = this->rx_buf_[this->rx_buf_pos_ + 2];
       if (prefix == 0x00) {
         this->peer_pub_[0] = 0x02;
         std::memcpy(this->peer_pub_.data() + 1, this->rx_buf_.data() + this->rx_buf_pos_ + 3, 32);
-        this->rx_buf_pos_ += 2 + 33;
+        this->rx_buf_pos_ += 2 + this->rx_frame_len_;
         this->rx_frame_ready_ = false;
         this->rx_frame_len_ = 0;
         if (this->rx_buf_pos_ >= this->rx_buf_len_) {
