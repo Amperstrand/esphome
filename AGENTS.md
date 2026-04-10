@@ -204,7 +204,7 @@ When `peers:` is configured, the daemon **only accepts MSG1 from listed identiti
 
 ```yaml
 peers:
-  - npub: "npub19u363m5kqup2g0rfg8m5xh93cf2g0fzthnmk3kqpr746h29"
+  - npub: "npub19u3647ut4jza04z7rxgf2r7cnaar4l0ckc3s5x84pcw9p4ypckmswnh629"
     alias: "fips-esp32s3"
 ```
 
@@ -370,6 +370,40 @@ affect this ESPHome component.
 | microfips | #71 | FIPS stale session state blocks reconnection |
 | microfips | #72 | BLE scan-cycle starvation |
 | microfips | #26 | Noise deviations D1-D3 documentation |
+
+## TCP Proxy Protocol (msg_type 0x60)
+
+The TCP proxy bridges TCP connections between the FIPS daemon and the ESP32's local
+services (e.g., ESPHome API on port 6053). It uses a new FMP link message type:
+
+```
+msg_type: 0x60 (TCP_PROXY_DATA)
+Payload: raw TCP bytes (no framing, no connection ID)
+Direction: bidirectional
+Encryption: FMP link-layer (automatic via send_encrypted_link_message)
+```
+
+### Data Flow
+
+```
+Daemon                          BLE                     ESP32
+  TCP listener :6053                                     TCP server :6053
+  |read bytes| ──FMP 0x60──► ──L2CAP──► |FMP decrypt| ──► |write to TCP client|
+  |write bytes| ◄──FMP 0x60── ◄─L2CAP── ◄──|send_established_msg(0x60)|
+```
+
+### Constraints
+
+- One TCP client at a time (no multiplexing in current implementation)
+- Max payload per BLE frame: ~476 bytes (512 MTU - 36 bytes FMP overhead)
+- No flow control beyond TCP's built-in backpressure on daemon side
+- ESP32 buffers one pending_outbound frame, drained each loop() iteration
+
+### Phase 2: Mesh-Wide Access
+
+See Amperstrand/fips#30 for the full architecture analysis. The recommended next step
+is to bind the daemon's TCP proxy on the fips0 IPv6 address and add a DNS entry so
+any FIPS mesh node can reach `esphomenpub.fips:6053`.
 
 ## Build and Test
 
