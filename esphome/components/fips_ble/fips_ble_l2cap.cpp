@@ -87,6 +87,7 @@ void FipsBleL2cap::start_advertising() {
   struct ble_gap_adv_params adv_params;
   struct ble_hs_adv_fields fields;
   struct ble_hs_adv_fields sr_fields;
+  ble_addr_t wl_addr;
   int rc;
 
   std::memset(&fields, 0, sizeof(fields));
@@ -122,6 +123,21 @@ void FipsBleL2cap::start_advertising() {
   std::memset(&adv_params, 0, sizeof(adv_params));
   adv_params.conn_mode = BLE_GAP_CONN_MODE_UND;
   adv_params.disc_mode = BLE_GAP_DISC_MODE_GEN;
+
+  if (this->has_peer_mac_) {
+    std::memset(&wl_addr, 0, sizeof(wl_addr));
+    wl_addr.type = BLE_ADDR_PUBLIC;
+    std::memcpy(wl_addr.val, this->allowed_peer_mac_.data(), this->allowed_peer_mac_.size());
+
+    rc = ble_gap_wl_set(&wl_addr, 1);
+    if (rc != 0) {
+      ESP_LOGW(TAG, "ble_gap_wl_set failed: %d, falling back to no-filter", rc);
+    } else {
+      adv_params.filter_policy = BLE_HCI_ADV_FILT_CONN;
+      ESP_LOGI(TAG, "BLE whitelist set: only %02x:%02x:%02x:%02x:%02x:%02x can connect", wl_addr.val[5],
+               wl_addr.val[4], wl_addr.val[3], wl_addr.val[2], wl_addr.val[1], wl_addr.val[0]);
+    }
+  }
 
   rc = ble_gap_adv_start(this->own_addr_type_, nullptr, BLE_HS_FOREVER, &adv_params,
                          FipsBleL2cap::gap_event_cb, this);
@@ -342,19 +358,29 @@ void FipsBleL2cap::on_gap_connect(uint16_t conn_handle, int status) {
    struct ble_gap_conn_desc desc;
    std::memset(&desc, 0, sizeof(desc));
    int rc = ble_gap_conn_find(conn_handle, &desc);
-   if (rc != 0) {
-     ESP_LOGW(TAG, "ble_gap_conn_find failed: %d", rc);
-     ble_gap_terminate(conn_handle, BLE_ERR_REM_USER_CONN_TERM);
-     return;
-   }
+    if (rc != 0) {
+      ESP_LOGW(TAG, "ble_gap_conn_find failed: %d", rc);
+      ble_gap_terminate(conn_handle, BLE_ERR_REM_USER_CONN_TERM);
+      return;
+    }
 
-   if (this->has_peer_mac_ && std::memcmp(desc.peer_id_addr.val, this->allowed_peer_mac_.data(), 6) != 0) {
-     ESP_LOGW(TAG, "Rejecting BLE connection from unknown MAC, disconnecting");
-     ble_gap_terminate(conn_handle, BLE_ERR_REM_USER_CONN_TERM);
-     return;
-   }
+    ESP_LOGD(TAG, "BLE GAP connect: peer_id_addr type=%d val=%02x:%02x:%02x:%02x:%02x:%02x",
+             desc.peer_id_addr.type,
+             desc.peer_id_addr.val[5], desc.peer_id_addr.val[4], desc.peer_id_addr.val[3],
+             desc.peer_id_addr.val[2], desc.peer_id_addr.val[1], desc.peer_id_addr.val[0]);
 
-  this->conn_handle_ = conn_handle;
+    if (this->has_peer_mac_ && std::memcmp(desc.peer_id_addr.val, this->allowed_peer_mac_.data(), 6) != 0) {
+      ESP_LOGW(TAG, "Unexpected connection from MAC %02x:%02x:%02x:%02x:%02x:%02x (expected whitelist only), ignoring",
+               desc.peer_id_addr.val[5], desc.peer_id_addr.val[4], desc.peer_id_addr.val[3],
+               desc.peer_id_addr.val[2], desc.peer_id_addr.val[1], desc.peer_id_addr.val[0]);
+      return;
+    }
+
+    ESP_LOGI(TAG, "BLE peer MAC accepted: %02x:%02x:%02x:%02x:%02x:%02x",
+             desc.peer_id_addr.val[5], desc.peer_id_addr.val[4], desc.peer_id_addr.val[3],
+             desc.peer_id_addr.val[2], desc.peer_id_addr.val[1], desc.peer_id_addr.val[0]);
+
+   this->conn_handle_ = conn_handle;
   this->state_ = L2capState::BLE_CONNECTED;
   ESP_LOGI(TAG, "BLE connected, handle=%d", conn_handle);
 }
