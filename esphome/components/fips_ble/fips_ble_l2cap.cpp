@@ -339,6 +339,21 @@ void FipsBleL2cap::on_gap_connect(uint16_t conn_handle, int status) {
     return;
   }
 
+   struct ble_gap_conn_desc desc;
+   std::memset(&desc, 0, sizeof(desc));
+   int rc = ble_gap_conn_find(conn_handle, &desc);
+   if (rc != 0) {
+     ESP_LOGW(TAG, "ble_gap_conn_find failed: %d", rc);
+     ble_gap_terminate(conn_handle, BLE_ERR_REM_USER_CONN_TERM);
+     return;
+   }
+
+   if (this->has_peer_mac_ && std::memcmp(desc.peer_id_addr.val, this->allowed_peer_mac_.data(), 6) != 0) {
+     ESP_LOGW(TAG, "Rejecting BLE connection from unknown MAC, disconnecting");
+     ble_gap_terminate(conn_handle, BLE_ERR_REM_USER_CONN_TERM);
+     return;
+   }
+
   this->conn_handle_ = conn_handle;
   this->state_ = L2capState::BLE_CONNECTED;
   ESP_LOGI(TAG, "BLE connected, handle=%d", conn_handle);

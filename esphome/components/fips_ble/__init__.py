@@ -5,7 +5,7 @@ import esphome.codegen as cg
 from esphome.components.esp32 import add_idf_sdkconfig_option, include_builtin_idf_component
 import esphome.config_validation as cv
 from esphome.const import CONF_ID
-from esphome.core import CORE
+from esphome.core import CORE, HexInt
 
 DEPENDENCIES = ["esp32"]
 CODEOWNERS = ["@fips-ble"]
@@ -15,6 +15,7 @@ _LOGGER = logging.getLogger(__name__)
 CONF_IDENTITY_SECRET = "identity_secret"
 CONF_IDENTITY_SEED = "identity_seed"
 CONF_PEER_PUBLIC_KEY = "peer_public_key"
+CONF_PEER_MAC = "peer_mac"
 CONF_API_PORT = "api_port"
 CONF_SELFTEST = "selftest"
 
@@ -28,6 +29,7 @@ CONFIG_SCHEMA = cv.Schema(
         cv.Optional(CONF_IDENTITY_SECRET): cv.All(cv.string, cv.Length(min=64, max=64)),
         cv.Optional(CONF_IDENTITY_SEED): cv.string_strict,
         cv.Required(CONF_PEER_PUBLIC_KEY): cv.All(cv.string, cv.Length(min=66, max=66)),
+        cv.Optional(CONF_PEER_MAC): cv.mac_address,
         cv.Optional(CONF_API_PORT, default=6053): cv.port,
         cv.Optional(CONF_SELFTEST, default=False): cv.boolean,
     }
@@ -71,6 +73,10 @@ async def to_code(config):
 
     cg.add(var.set_identity_secret(_derive_identity_secret(config)))
     cg.add(var.set_peer_public_key(config[CONF_PEER_PUBLIC_KEY]))
+    if peer_mac := config.get(CONF_PEER_MAC):
+        # NimBLE stores MAC in little-endian (wire) order: val[0] is LSB, val[5] is MSB.
+        # cv.mac_address.parts gives human-readable big-endian order (MSB first), so reverse.
+        cg.add(var.set_peer_mac([HexInt(part) for part in reversed(peer_mac.parts)]))
     cg.add(var.set_api_port(config[CONF_API_PORT]))
     cg.add(var.set_selftest(config[CONF_SELFTEST]))
 

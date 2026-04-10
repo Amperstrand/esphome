@@ -47,6 +47,10 @@ class FipsBleL2cap {
 
   void set_peer_pub(const uint8_t *pub) { std::memcpy(this->peer_pub_.data(), pub, PUBKEY_SIZE); }
   void set_own_pub(const uint8_t *pub) { std::memcpy(this->own_pub_.data(), pub, PUBKEY_SIZE); }
+  void set_peer_mac(const std::array<uint8_t, 6> &mac) {
+    this->allowed_peer_mac_ = mac;
+    this->has_peer_mac_ = true;
+  }
 
   bool send(const uint8_t *data, size_t len);
   int recv(uint8_t *buf, size_t buf_len);
@@ -79,6 +83,8 @@ class FipsBleL2cap {
 
   std::array<uint8_t, 33> peer_pub_{};
   std::array<uint8_t, 33> own_pub_{};
+  std::array<uint8_t, 6> allowed_peer_mac_{};
+  bool has_peer_mac_{false};
 
   std::array<uint8_t, L2CAP_FRAME_CAP> rx_buf_{};
   size_t rx_buf_len_{0};

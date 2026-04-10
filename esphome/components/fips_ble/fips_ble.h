@@ -42,6 +42,7 @@ class FipsBleComponent : public Component {
 
   void set_identity_secret(const std::string &secret) { this->identity_secret_hex_ = secret; }
   void set_peer_public_key(const std::string &pub_key) { this->peer_pub_key_hex_ = pub_key; }
+  void set_peer_mac(const std::array<uint8_t, 6> &mac) { this->l2cap_.set_peer_mac(mac); }
   void set_api_port(uint16_t port) { this->api_port_ = port; }
   void set_selftest(bool selftest) { this->selftest_ = selftest; }
 
