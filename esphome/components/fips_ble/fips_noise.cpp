@@ -22,9 +22,9 @@ static int fips_rng(void *ctx, unsigned char *buf, size_t len) {
 }
 
 static const uint8_t PROTOCOL_NAME_IK[] = "Noise_IK_secp256k1_ChaChaPoly_SHA256";
-static constexpr size_t PROTOCOL_NAME_IK_LEN = 37;
+static constexpr size_t PROTOCOL_NAME_IK_LEN = sizeof(PROTOCOL_NAME_IK) - 1;  // 36, no null terminator
 static const uint8_t PROTOCOL_NAME_XK[] = "Noise_XK_secp256k1_ChaChaPoly_SHA256";
-static constexpr size_t PROTOCOL_NAME_XK_LEN = 37;
+static constexpr size_t PROTOCOL_NAME_XK_LEN = sizeof(PROTOCOL_NAME_XK) - 1;  // 36, no null terminator
 
 bool x_only_ecdh(const uint8_t *secret_key, const uint8_t *pub_key, uint8_t *out) {
   mbedtls_ecp_group group;
