@@ -405,6 +405,7 @@ void FipsBleL2cap::on_l2cap_disconnected(uint16_t conn_handle, struct ble_l2cap_
 
 void FipsBleL2cap::on_l2cap_data_received(struct ble_l2cap_chan *chan, struct os_mbuf *sdu_rx) {
   if (chan != this->l2cap_chan_) {
+    ESP_LOGW(TAG, "data on non-active channel, dropping %d bytes", sdu_rx ? OS_MBUF_PKTLEN(sdu_rx) : 0);
     os_mbuf_free_chain(sdu_rx);
     return;
   }
@@ -448,12 +449,15 @@ void FipsBleL2cap::on_l2cap_data_received(struct ble_l2cap_chan *chan, struct os
   // The payload is at rx_buf_[rx_buf_pos_ + 2 .. rx_buf_pos_ + 2 + frame_len].
   if (!this->rx_frame_ready_) {
     size_t available = this->rx_buf_len_ - this->rx_buf_pos_;
+    ESP_LOGD(TAG, "rx frame check: available=%d buf_len=%d buf_pos=%d", available, this->rx_buf_len_, this->rx_buf_pos_);
     if (available >= 2) {
-      uint16_t frame_len = static_cast<uint16_t>(this->rx_buf_[this->rx_buf_pos_]) |
-                           (static_cast<uint16_t>(this->rx_buf_[this->rx_buf_pos_ + 1]) << 8);
+      uint16_t frame_len = (static_cast<uint16_t>(this->rx_buf_[this->rx_buf_pos_]) << 8) |
+                           static_cast<uint16_t>(this->rx_buf_[this->rx_buf_pos_ + 1]);
+      ESP_LOGD(TAG, "rx frame: frame_len=%d available=%d", frame_len, available);
       if (frame_len > 0 && available >= 2 + frame_len) {
         this->rx_frame_ready_ = true;
         this->rx_frame_len_ = frame_len;
+        ESP_LOGD(TAG, "rx frame ready: len=%d prefix=0x%02x", frame_len, this->rx_buf_[this->rx_buf_pos_ + 2]);
       }
     }
   }
