@@ -405,6 +405,102 @@ See Amperstrand/fips#30 for the full architecture analysis. The recommended next
 is to bind the daemon's TCP proxy on the fips0 IPv6 address and add a DNS entry so
 any FIPS mesh node can reach `esphomenpub.fips:6053`.
 
+## Leaf Identity Proxy (Mesh-Wide ESP32 Access)
+
+The leaf identity proxy lets any FIPS mesh node reach the ESP32's ESPHome API at
+`http://<npub>.fips:6053`. The gateway daemon holds the ESP32's derived keypair and
+terminates FSP (Noise XK) sessions on the ESP32's behalf, then bridges traffic to the
+ESP32 over FMP 0x60 over BLE.
+
+### Architecture
+
+```
+Remote FIPS Node ──FSP (Noise XK, ESP32 identity)──► Gateway ──FMP 0x60──► ESP32
+                  ◄─────────────────────────────────────────────────────────
+```
+
+The gateway derives the ESP32's identity keypair from the same `identity_seed` used
+by the ESP32 firmware. This means remote nodes authenticate against the ESP32's real
+identity, even though the gateway terminates the FSP session.
+
+**Security model:** Step 1 (current) trusts the gateway with the ESP32's private key.
+Step 2 (future) would run full FSP on the ESP32 for true end-to-end encryption, with
+the gateway acting only as a BLE-to-mesh relay.
+
+### Configuration
+
+Add a `leaf_proxies` stanza to `/etc/fips/fips.yaml`:
+
+```yaml
+leaf_proxies:
+  - identity_seed: "fips-esp32s3"
+    services:
+      - port: 6053
+        protocol: tcp
+```
+
+The `identity_seed` must match the `esphome: name:` in the ESP32's YAML. The gateway
+derives the keypair as `SHA256("esphome:fips_ble:" + identity_seed)`, the same
+derivation used by the ESP32 at compile time.
+
+Restart the daemon after changing the config:
+
+```bash
+sudo systemctl restart fips
+```
+
+### Current values
+
+| Property | Value |
+|----------|-------|
+| ESP32-S3 npub | `npub1vu6pp0ld8u46346q03wwym8htfw4w9zsrgwjeyshfcak8ncr5tessunjkp` |
+| ESP32-S3 FipsAddress | `fd91:1328:91ed:6ef5:c0ff:983f:d4c1:e9c9` |
+| ESP32-S3 NodeAddr | `91132891ed6ef5c0ff983fd4c1e9c970` |
+| Gateway FipsAddress | `fd8b:5844:e7c0:90f6:cdad:23:54d5:6ec0` |
+| identity_seed | `"fips-esp32s3"` |
+
+### Accessing the ESP32 from any FIPS node
+
+DNS is already configured via `/etc/systemd/resolved.conf.d/fips.conf`. To reach the
+ESP32 from any mesh node:
+
+```bash
+# Test connectivity (gets binary protobuf response, not human-readable)
+curl http://npub1vu6pp0ld8u46346q03wwym8htfw4w9zsrgwjeyshfcak8ncr5tessunjkp.fips:6053/
+
+# Real interaction requires an ESPHome API client (e.g. aioesphomeapi)
+# or a raw TCP connection:
+nc npub1vu6pp0ld8u46346q03wwym8htfw4w9zsrgwjeyshfcak8ncr5tessunjkp.fips 6053
+```
+
+The ESPHome API uses protobuf over TCP, so `curl` will return binary data. Use
+`aioesphomeapi` (Python) or the ESPHome dashboard for real interaction.
+
+### Debugging
+
+```bash
+# Check TUN has both addresses (gateway + ESP32)
+ip -6 addr show dev fips0
+# Expected: gateway /128 + ESP32 /128 (fd91:1328:...)
+
+# Check TCP proxy listener on the ESP32's address
+ss -tlnp6 | grep 6053
+
+# Check daemon logs for leaf proxy activity
+sudo journalctl -u fips --since "5 min ago" --no-pager | grep -E "leaf|tcp_proxy|91132891"
+
+# Check DNS resolution
+dig AAAA npub1vu6pp0ld8u46346q03wwym8htfw4w9zsrgwjeyshfcak8ncr5tessunjkp.fips @127.0.0.1 -p 5354
+```
+
+### Known limitations
+
+- One TCP client at a time per leaf (no multiplexing)
+- Gateway holds the ESP32's private key, so security depends on trusting the gateway
+- Restart required for config changes (no hot-reload of `leaf_proxies`)
+- Bloom filter MTU: FilterAnnounce packets (1071 bytes) exceed BLE MTU (512 bytes),
+  causing log spam but not breaking connectivity
+
 ## Build and Test
 
 ```bash
